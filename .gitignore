@@ -1,0 +1,60 @@
+# -----------------------------------------------------------------------------
+# ESP32-CAM Python project .gitignore
+# -----------------------------------------------------------------------------
+
+# ----- Secrets & credentials (never commit) -----
+secrets.h
+*.local
+.env
+.env.*
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# ----- Arduino / ESP32 / PlatformIO -----
+.pio/
+.pioenvs/
+.piolibdeps/
+*.bin
+*.elf
+*.map
+
+# ----- IDE & editors -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+*.sublime-*
+
+# ----- OS -----
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# ----- Logs & temp -----
+*.log
+*.tmp
+*.temp
+.cache/
+
+# ----- Optional: uncomment if you use these -----
+# *.mp4
+# *.avi
+# captures/
