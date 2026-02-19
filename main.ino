@@ -54,6 +54,47 @@ static void handleJpgHi() {
   serveJpg();
 }
 
+// MJPEG stream: throttle by timestamp (~30 FPS). Send raw multipart (no chunked
+// encoding) so Python/browsers get a continuous stream without getting stuck.
+#define STREAM_FPS 30
+#define STREAM_INTERVAL_MS (1000 / STREAM_FPS)
+
+static void handleStream() {
+  if (!esp32cam::Camera.changeResolution(loRes)) {
+    Serial.println("stream: SET-LO-RES FAIL");
+  }
+  WiFiClient client = server.client();
+  client.print("HTTP/1.1 200 OK\r\n"
+               "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+               "Connection: keep-alive\r\n"
+               "\r\n");
+  client.flush();
+  unsigned long lastFrameTime = 0;
+  while (client.connected()) {
+    unsigned long now = millis();
+    if (now - lastFrameTime >= STREAM_INTERVAL_MS) {
+      auto frame = esp32cam::capture();
+      if (frame == nullptr) break;
+      client.print("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ");
+      client.print(frame->size());
+      client.print("\r\n\r\n");
+      client.flush();  // push part header so client can parse Content-Length before JPEG
+      // send JPEG in small chunks so first frame is delivered (writeTo can block on large buffer)
+      const size_t chunkSize = 1024;
+      const uint8_t* p = frame->data();
+      for (size_t i = 0; i < frame->size(); i += chunkSize) {
+        size_t n = (frame->size() - i) > chunkSize ? chunkSize : (frame->size() - i);
+        client.write(p + i, n);
+      }
+      client.print("\r\n");
+      client.flush();
+      lastFrameTime = now;
+    } else {
+      delay(1);
+    }
+  }
+}
+
 // HTML: live view by polling /cam-lo.jpg (no Serial in hot path)
 static const char htmlPage[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -72,13 +113,12 @@ static const char htmlPage[] PROGMEM = R"rawliteral(
 <body>
   <h1>ESP32-CAM Live Stream</h1>
   <div class="status">Status: <span id="status">Connecting...</span></div>
-  <img src="/cam-lo.jpg" alt="Camera" id="stream">
+  <img src="/stream" alt="Camera" id="stream">
   <script>
     var img = document.getElementById('stream');
     var status = document.getElementById('status');
     img.onload = function() { status.textContent = 'Connected'; status.style.color = '#4CAF50'; };
     img.onerror = function() { status.textContent = 'Error'; status.style.color = '#f44336'; };
-    setInterval(function() { img.src = '/cam-lo.jpg?t=' + Date.now(); }, 100);
   </script>
 </body>
 </html>
@@ -128,6 +168,7 @@ void setup() {
   Serial.println(WiFi.localIP());
   Serial.println("  /cam-lo.jpg  /cam-mid.jpg  /cam-hi.jpg");
   Serial.println("  /snap-lo.jpg (alias)  /snap.jpg (alias)");
+  Serial.println("  /stream (MJPEG, one client at a time)");
   Serial.println("=================================");
 
   server.on("/", HTTP_GET, []() {
@@ -140,6 +181,7 @@ void setup() {
   server.on("/cam-hi.jpg", HTTP_GET, handleJpgHi);
   server.on("/snap-lo.jpg", HTTP_GET, handleJpgLo);
   server.on("/snap.jpg", HTTP_GET, handleJpgMid);
+  server.on("/stream", HTTP_GET, handleStream);
 
   server.begin();
   Serial.println("Web server started");
