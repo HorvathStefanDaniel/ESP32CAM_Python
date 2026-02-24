@@ -9,6 +9,8 @@ set "SCRIPT=%~1"
 if "%SCRIPT%"=="" (
   echo Usage: run.bat hand_gesture ^| gesture_launcher ^| face_detect ^| object_count [options]
   echo Example: run.bat hand_gesture --webcam --led-url http://10.0.0.1
+  echo.
+  pause
   exit /b 1
 )
 shift
@@ -23,6 +25,8 @@ set "SCRIPT_PATH=%PROJECT_DIR%\%SCRIPT%.py"
 
 if not exist "%SCRIPT_PATH%" (
   echo Script not found: %SCRIPT_PATH%
+  echo.
+  pause
   exit /b 1
 )
 
@@ -37,14 +41,23 @@ if not exist "%PYTHON%" (
   )
   if not exist "%PYTHON%" (
     echo Failed to create venv. Install Python 3.9+ from python.org and ensure 'python' or 'py' is on PATH.
+    echo.
+    pause
     exit /b 1
   )
 )
 
 echo Ensuring dependencies are installed ...
 "%PYTHON%" -m pip install -q -r "%REQUIREMENTS%"
-if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+if %ERRORLEVEL% neq 0 (
+  echo Pip install failed.
+  echo.
+  pause
+  exit /b %ERRORLEVEL%
+)
 
 if defined PYTHONPATH (set "PYTHONPATH=%PROJECT_DIR%;%PYTHONPATH%") else (set "PYTHONPATH=%PROJECT_DIR%")
 "%PYTHON%" -u "%SCRIPT_PATH%" %*
+echo.
+pause
 exit /b %ERRORLEVEL%
