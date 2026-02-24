@@ -1,4 +1,6 @@
 opencv-python>=4.8.0
 requests>=2.28.0
+# hand_gesture.py needs Python 3.9+ (mediapipe 0.10+ uses list[] type hints)
+mediapipe>=0.10.0
 # Optional: for face recognition (identify who). Uncomment to enable --recognize in face_detect.py
 # face_recognition>=1.3.0

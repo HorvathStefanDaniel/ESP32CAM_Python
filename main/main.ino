@@ -56,6 +56,8 @@ void setup() {
       delay(3000);
       ESP.restart();
     }
+    // Flip image upside down (e.g. if camera is mounted inverted)
+    Camera.update([](esp32cam::Settings& s) { s.vflip = true; });
   }
 
   WiFi.persistent(false);

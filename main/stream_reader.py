@@ -16,7 +16,7 @@ except ImportError:
     requests = None
 
 
-DEFAULT_STREAM_URL = os.environ.get("STREAM_URL", "http://192.168.1.100/cam-lo.jpg")
+DEFAULT_STREAM_URL = os.environ.get("STREAM_URL", "http://192.168.1.100/stream")
 RECONNECT_DELAY_SEC = 2.0
 CONNECT_TIMEOUT_SEC = 10
 STREAM_READ_TIMEOUT_SEC = 30
@@ -72,7 +72,7 @@ def _read_frames_http(url, debug=False):
     boundary = boundary.strip().encode("ascii")
     frame_start = b"--" + boundary
     buf = b""
-    read_size = 4096  # Larger chunks reduce overhead when reading MJPEG stream
+    read_size = 32768
     first_chunk = True
     first_frame_logged = False
     pending_content_length = None  # when set, we're reading frame body across chunks
@@ -171,6 +171,21 @@ def read_frames(stream_url=None, reconnect=True):
             break
         time.sleep(RECONNECT_DELAY_SEC)
         print("[stream_reader] Reconnecting ...")
+
+
+def read_frames_webcam(camera_index=0):
+    """Yield BGR frames from the default or specified webcam (OpenCV VideoCapture)."""
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open webcam (index {camera_index}). Check it is connected and not in use.")
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                break
+            yield frame
+    finally:
+        cap.release()
 
 
 def add_stream_url_arg(parser):
