@@ -7,6 +7,7 @@ secrets.h
 .gesture_launcher_config.txt
 main/known_faces/*.jpg
 main/known_faces/*.jpeg
+!main/known_faces/example.jpg
 *.local
 .env
 .env.*
