@@ -48,7 +48,7 @@
 The project combines an \textbf{ESP32-CAM} camera board with Python vision scripts and an \textbf{ESP32 LED strip} controller. The ESP32-CAM serves an MJPEG video stream over WiFi. A PC runs Python scripts that consume this stream for object counting, face detection, or hand gesture recognition. 
 The hand gesture script controls a separate ESP32-driven addressable LED strip over HTTP: open palm turns lights on, OK gesture turns them off, thumbs up/down adjust brightness, and index finger (pointer) drives fun mode (moving cluster position and hue) where pinching triggers a tetris like stacking effect.
 
-Optional ways to start the different scripts include \texttt{gesture\_launcher.py} (a small UI to paste camera and LED strip IPs and start the hand gesture script) and \texttt{run.ps1} (PowerShell launcher that creates a virtual environment, installs dependencies, and runs a chosen script).
+Optional ways to start the different scripts include \texttt{gesture\_launcher.py} (a small UI to paste camera and LED strip IPs and start the hand gesture script), \texttt{run.ps1} (PowerShell launcher that creates a virtual environment, installs dependencies, and runs a chosen script), and \texttt{run.exe} (a double-clickable Windows executable built from \texttt{run\_launcher.py} that offers the same behaviour with an interactive menu for script choice, webcam, URLs, and options).
 
 \subsection{Key Features}
 \begin{itemize}
@@ -58,7 +58,7 @@ Optional ways to start the different scripts include \texttt{gesture\_launcher.p
     \item \textbf{Face detection:} OpenCV Haar cascade; optional face recognition via \texttt{face\_recognition} and \texttt{known\_faces/}
     \item \textbf{Hand gestures:} MediaPipe Hand Landmarker; open palm = on, OK = off, thumbs = brightness, pointer = fun mode
     \item \textbf{LED strip control:} HTTP API (on/off, fun position/hue, brightness); serial commands for the LED board
-    \item \textbf{Launcher:} \texttt{run.ps1} for venv and script selection; \texttt{gesture\_launcher.py} for camera/LED IPs and Start
+    \item \textbf{Launcher:} \texttt{run.ps1} for venv and script selection; \texttt{run.exe} (built from \texttt{run\_launcher.py}) for a double-click menu with webcam/URL/recognition prompts; \texttt{gesture\_launcher.py} for camera/LED IPs and Start
 \end{itemize}
 
 \section{Links}
@@ -116,6 +116,24 @@ Set \texttt{NUM\_LEDS} to match your strip length. For WS2812, install the Adafr
 \subsection{Launcher}
 \texttt{run.ps1} takes a script name (\texttt{object\_count}, \texttt{face\_detect}, \texttt{hand\_gesture}, \texttt{gesture\_launcher}), ensures a \texttt{.venv} exists (Python 3.9+ for hand\_gesture/gesture\_launcher), runs \texttt{pip install -r requirements.txt}, sets \texttt{PYTHONPATH}, and runs the corresponding \texttt{.py} script with any extra arguments.
 
+\subsection{Creating and using \texttt{run.exe}}
+A Windows executable \texttt{run.exe} can be built so that scripts can be started by double-clicking, without opening a terminal or running PowerShell. It behaves like \texttt{run.ps1} but adds an interactive menu when started with no arguments.
+
+\textbf{How to create \texttt{run.exe}:}
+\begin{enumerate}
+    \item Open a terminal in the project directory (the \texttt{main} folder containing \texttt{run.ps1} and the \texttt{.py} scripts).
+    \item Run: \texttt{python build\_run\_exe.py}. The script installs PyInstaller if needed, then builds a single \texttt{run.exe} in the same folder.
+    \item Keep \texttt{run.exe} in that project folder; it uses the folder to find \texttt{.venv}, \texttt{requirements.txt}, and the Python scripts.
+\end{enumerate}
+
+\textbf{How to use \texttt{run.exe}:}
+\begin{itemize}
+    \item \textbf{Double-click} (or run with no arguments): A console menu appears. Choose the script (1 = object\_count, 2 = face\_detect, 3 = hand\_gesture, 4 = gesture\_launcher). Then you are prompted for: use webcam (y/n), camera/stream URL if not webcam, and for \texttt{hand\_gesture} the optional LED strip URL. For \texttt{face\_detect} you are also asked whether to use face recognition. After that, the chosen script runs with those options.
+    \item \textbf{Command line:} \texttt{run.exe} \textit{script} [\textit{args...}] runs the script directly, e.g.\ \texttt{run.exe hand\_gesture --webcam --led-url http://192.168.1.101}. No menu is shown; arguments are passed through as with \texttt{run.ps1}.
+\end{itemize}
+
+The executable is built from \texttt{run\_launcher.py}, which performs the same venv creation, dependency install, and \texttt{PYTHONPATH} setup as \texttt{run.ps1}. \texttt{run.exe} is listed in \texttt{.gitignore}; rebuild after updating \texttt{run\_launcher.py} if you change the launcher behaviour.
+
 \subsection{Libraries to install}
 \textbf{Python} (install via \texttt{pip install -r requirements.txt} in the project \texttt{.venv}):
 \begin{itemize}
@@ -128,7 +146,7 @@ Set \texttt{NUM\_LEDS} to match your strip length. For WS2812, install the Adafr
 \textbf{Arduino / ESP32} (install via Arduino Library Manager or PlatformIO):
 \begin{itemize}
     \item \texttt{main.ino}: \texttt{WebServer}, \texttt{WiFi} (ESP32 core), \texttt{esp32cam} (camera and stream). Add \texttt{secrets.h} with \texttt{ssid} and \texttt{password}.
-    \item \texttt{esp32\_led\_strip.ino}: \texttt{WebServer}, \texttt{WiFi}; if \texttt{USE\_WS2812 = 1}, install \texttt{Adafruit NeoPixel}. Add \texttt{secrets.h} with WiFi credentials.
+    \item \texttt{esp32\_led\_strip.ino}: \texttt{WebServer}, \texttt{WiFi}; if \texttt{USE\_WS2812 = 1}, install \texttt{``Adafruit NeoPixel''}. Add \texttt{secrets.h} with WiFi credentials.
 \end{itemize}
 
 \section{Environment and Dependencies}
@@ -161,7 +179,7 @@ Both sketches expect a \texttt{secrets.h} (or equivalent) with \texttt{ssid} and
 \section{Architecture and Diagrams}
 
 \subsection{System Architecture}
-Figure \ref{fig:system} shows the high-level flow: ESP32-CAM streams MJPEG to the PC; Python scripts use \texttt{stream\_reader} to get frames; \texttt{hand\_gesture} sends HTTP requests to the ESP32 LED strip. The launcher and \texttt{run.ps1} are optional entry points.
+Figure \ref{fig:system} shows the high-level flow: ESP32-CAM streams MJPEG to the PC; Python scripts use \texttt{stream\_reader} to get frames; \texttt{hand\_gesture} sends HTTP requests to the ESP32 LED strip. The launchers (\texttt{run.ps1}, \texttt{run.exe}, \texttt{gesture\_launcher}) are optional entry points.
 
 \begin{figure}[ht]
 \centering
@@ -172,7 +190,7 @@ Figure \ref{fig:system} shows the high-level flow: ESP32-CAM streams MJPEG to th
   \node[draw,rectangle,rounded corners,right=0.8cm of reader] (face) {face\_detect};
   \node[draw,rectangle,rounded corners,below right=0.8cm and 1.2cm of reader] (hand) {hand\_gesture};
   \node[draw,rectangle,rounded corners,right=2.2cm of hand] (led) {ESP32 LED strip};
-  \node[draw,rectangle,rounded corners,below=0.6cm of reader] (run) {run.ps1 / gesture\_launcher};
+  \node[draw,rectangle,rounded corners,below=0.6cm of reader] (run) {run.ps1 / run.exe / gesture\_launcher};
 
   \draw[->] (cam) -- node[above] {MJPEG} (reader);
   \draw[->] (reader) -- (obj);
@@ -229,8 +247,8 @@ Figure \ref{fig:gesture} summarizes the hand gesture path: frames go to MediaPip
 \label{fig:gesture}
 \end{figure}
 
-\subsection{run.ps1 Flow}
-Figure \ref{fig:runps1} outlines the launcher: script name and arguments trigger venv creation (if missing), Python 3.9+ check for hand\_gesture/gesture\_launcher, dependency install, \texttt{PYTHONPATH} set, and script execution.
+\subsection{run.ps1 / run.exe flow}
+Figure \ref{fig:runps1} outlines the launcher: script name and arguments (or the interactive menu when using \texttt{run.exe} with no args) trigger venv creation (if missing), Python 3.9+ check for hand\_gesture/gesture\_launcher, dependency install, \texttt{PYTHONPATH} set, and script execution.
 
 \begin{figure}[ht]
 \centering
@@ -250,7 +268,7 @@ Figure \ref{fig:runps1} outlines the launcher: script name and arguments trigger
   \draw[->] (pip) -- (path);
   \draw[->] (path) -- (run);
 \end{tikzpicture}
-\caption{run.ps1 flow from script selection to execution.}
+\caption{run.ps1 / run.exe flow from script selection to execution.}
 \label{fig:runps1}
 \end{figure}
 
@@ -302,13 +320,18 @@ The goal is to separate foreground objects from the background and then count co
 
 \section{Script Usage}
 
-Run via \texttt{run.ps1} or directly with the project directory on \texttt{PYTHONPATH}: [text in square brackets are comments and should not be included when using the commands in terminal]
+Run via \texttt{run.ps1}, \texttt{run.exe}, or directly with the project directory on \texttt{PYTHONPATH}. [Text in square brackets are comments and should not be included when using the commands in the terminal.]
+
+\textbf{PowerShell (\texttt{run.ps1}):}
 \begin{lstlisting}[language=bash]
 .\run.ps1 object_count --url http://[ip address]/stream --min-area 500[optional] ...
 .\run.ps1 face_detect --url ... --recognize[to make use of images in the known\_faces folder] ...
-.\run.ps1 hand_gesture --url ... --led-url http://LED_IP --webcam --mirror[so that the right hand is shown on the right of the screen] ...
-.\run.ps1 gesture_launcher [has UI for launching hand_gesture more comfortably] 
+.\run.ps1 hand_gesture --url ... --led-url http://LED_IP --webcam --mirror ...
+.\run.ps1 gesture_launcher
 \end{lstlisting}
+
+\textbf{Executable (\texttt{run.exe}):} Double-click \texttt{run.exe} for an interactive menu (choose script, then answer prompts for webcam, URL, face recognition, LED URL). Or from a terminal: \texttt{run.exe hand\_gesture --webcam --led-url http://LED\_IP}, \texttt{run.exe face\_detect --recognize}, etc.
+
 Common flags: \texttt{--url} (stream URL), \texttt{--led-url} (LED strip base URL), \texttt{--webcam} (use local webcam instead of ESP32-CAM), \texttt{--mirror} (mirror display). For object counting, click on the image to set background. For hand gestures, press \texttt{q} to quit and \texttt{m} to toggle mirror.
 
 \section{LED Strip HTTP API}
@@ -360,6 +383,9 @@ PINCH       & Explosion from hand position (1 or 2 hands) \\
     \item \texttt{hand\_gesture.py} -- Hand gesture detection and LED control
     \item \texttt{gesture\_launcher.py} -- UI to configure camera/LED URLs and start hand gesture
     \item \texttt{run.ps1} -- PowerShell launcher: venv, dependencies, script selection
+    \item \texttt{run\_launcher.py} -- Python launcher (same logic as run.ps1; interactive menu for script, webcam, URL, recognition)
+    \item \texttt{build\_run\_exe.py} -- Builds \texttt{run.exe} from \texttt{run\_launcher.py} using PyInstaller (run once; \texttt{run.exe} appears in project folder)
+    \item \texttt{run.exe} -- Windows executable (build with \texttt{python build\_run\_exe.py}); double-click for menu or pass script name and args
     \item \texttt{requirements.txt} -- Python dependencies (opencv-python, requests, mediapipe; optional face\_recognition)
     \item \texttt{secrets.h} -- WiFi credentials for both ESP32 sketches (not in repo; add locally)
 \end{itemize}
