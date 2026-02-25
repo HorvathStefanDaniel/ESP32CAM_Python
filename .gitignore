@@ -58,6 +58,9 @@ Desktop.ini
 *.temp
 .cache/
 
+# ----- Launcher exe (build with: python build_run_exe.py) -----
+main/run.exe
+
 # ----- Optional: uncomment if you use these -----
 # *.mp4
 # *.avi

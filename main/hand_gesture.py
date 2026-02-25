@@ -505,18 +505,21 @@ def _worker(args, frame_queue, stop_event, mirror_ref=None):
                                 h2 = max(0, min(360, int(lm1.y * 360) % 360))
                                 if _send_led_explosion_two(args.led_url, p1, h1, p2, h2):
                                     last_explosion_sent = now
+                                    last_led_state = None  # strip mode changed; next OPEN_HAND/OK will re-send
                             elif pinch0:
                                 lm = first_hand_landmarks[INDEX_TIP]
                                 p0 = max(0, min(100, int(lm.x * 100)))
                                 h0 = max(0, min(360, int(lm.y * 360) % 360))
                                 if _send_led_explosion(args.led_url, p0, h0):
                                     last_explosion_sent = now
+                                    last_led_state = None
                             elif pinch1:
                                 lm = second_hand_landmarks[INDEX_TIP]
                                 p1 = max(0, min(100, int(lm.x * 100)))
                                 h1 = max(0, min(360, int(lm.y * 360) % 360))
                                 if _send_led_explosion_hand1(args.led_url, p1, h1):
                                     last_explosion_sent = now
+                                    last_led_state = None
                         if (g0_stable == "POINTER" and g1_stable == "POINTER" and first_hand_landmarks
                                 and second_hand_landmarks and len(first_hand_landmarks) > INDEX_TIP
                                 and len(second_hand_landmarks) > INDEX_TIP):
@@ -529,6 +532,7 @@ def _worker(args, frame_queue, stop_event, mirror_ref=None):
                                 h2 = max(0, min(360, int(lm1.y * 360) % 360))
                                 if _send_led_fun_two(args.led_url, p1, h1, p2, h2):
                                     last_fun_sent = now
+                                    last_led_state = None  # strip in fun mode; next OPEN_HAND/OK will re-send
                         elif g0_stable == "POINTER" and first_hand_landmarks and len(first_hand_landmarks) > INDEX_TIP:
                             if now - last_fun_sent >= FUN_THROTTLE_SEC:
                                 lm = first_hand_landmarks[INDEX_TIP]
@@ -536,6 +540,7 @@ def _worker(args, frame_queue, stop_event, mirror_ref=None):
                                 hue = max(0, min(360, int(lm.y * 360) % 360))
                                 if _send_led_fun(args.led_url, position_pct, hue):
                                     last_fun_sent = now
+                                    last_led_state = None
             else:
                 led_gesture_hist = {}
 
@@ -679,16 +684,19 @@ def main():
                                     h2 = max(0, min(360, int(lm1[INDEX_TIP].y * 360) % 360))
                                     if _send_led_explosion_two(args.led_url, p1, h1, p2, h2):
                                         last_explosion_sent = now
+                                        last_led_state = None
                                 elif pinch0:
                                     p0 = max(0, min(100, int(lm0[INDEX_TIP].x * 100)))
                                     h0 = max(0, min(360, int(lm0[INDEX_TIP].y * 360) % 360))
                                     if _send_led_explosion(args.led_url, p0, h0):
                                         last_explosion_sent = now
+                                        last_led_state = None
                                 elif pinch1:
                                     p1 = max(0, min(100, int(lm1[INDEX_TIP].x * 100)))
                                     h1 = max(0, min(360, int(lm1[INDEX_TIP].y * 360) % 360))
                                     if _send_led_explosion_hand1(args.led_url, p1, h1):
                                         last_explosion_sent = now
+                                        last_led_state = None
                             if (g0_stable == "POINTER" and g1_stable == "POINTER" and lm0 and lm1
                                     and len(lm0) > INDEX_TIP and len(lm1) > INDEX_TIP):
                                 if now - last_fun_sent >= FUN_THROTTLE_SEC:
@@ -698,6 +706,7 @@ def main():
                                     h2 = max(0, min(360, int(lm1[INDEX_TIP].y * 360) % 360))
                                     if _send_led_fun_two(args.led_url, p1, h1, p2, h2):
                                         last_fun_sent = now
+                                        last_led_state = None
                             elif g0_stable == "POINTER" and lm0 and len(lm0) > INDEX_TIP:
                                 if now - last_fun_sent >= FUN_THROTTLE_SEC:
                                     lm = lm0[INDEX_TIP]
@@ -705,6 +714,7 @@ def main():
                                     h1 = max(0, min(360, int(lm.y * 360) % 360))
                                     if _send_led_fun(args.led_url, p1, h1):
                                         last_fun_sent = now
+                                        last_led_state = None
                 else:
                     led_gesture_hist = {}
         finally:
