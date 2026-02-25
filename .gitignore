@@ -5,6 +5,8 @@
 # ----- Secrets & credentials (never commit) -----
 secrets.h
 .gesture_launcher_config.txt
+main/known_faces/*.jpg
+main/known_faces/*.jpeg
 *.local
 .env
 .env.*

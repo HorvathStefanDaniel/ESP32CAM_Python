@@ -3,8 +3,7 @@
  *
  * Stripped-down firmware for maximum JPEG throughput.
  * Endpoints:
- *   /cam.jpg   – single JPEG snapshot (640x480)
- *   /stream    – MJPEG stream (640x480)
+ *   /stream    – MJPEG stream
  *   /          – bare-bones HTML viewer
  *
  * Hardware: ESP32-CAM (AI Thinker, OV2640)

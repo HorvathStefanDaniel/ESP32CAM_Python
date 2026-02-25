@@ -18,7 +18,7 @@ import threading
 import cv2
 import numpy as np
 
-from stream_reader import read_frames, add_stream_url_arg
+from stream_reader import read_frames, read_frames_webcam, add_stream_url_arg
 
 # OpenCV Haar cascade (shipped with opencv-python)
 CASCADE_PATH = os.path.join(
@@ -42,7 +42,16 @@ def parse_args():
     p.add_argument("--no-window", action="store_true", help="Headless: only print, no imshow")
     p.add_argument("--scale", type=float, default=2.0, help="Display scale (e.g. 2.0 = double size). Default: 2.0")
     p.add_argument("--no-face-windows", action="store_true", help="Disable separate window per detected face")
+    p.add_argument("--webcam", action="store_true", help="Use local webcam instead of ESP32-CAM stream.")
+    p.add_argument("--camera-index", type=int, default=0, help="Webcam device index (default: 0). Only used with --webcam.")
     return p.parse_args()
+
+
+def _get_frame_source(args):
+    """Return a frame iterator: webcam or stream URL."""
+    if args.webcam:
+        return read_frames_webcam(args.camera_index)
+    return read_frames(args.url)
 
 
 def load_face_detector():
@@ -135,7 +144,7 @@ FACE_WINDOW_START_Y = 30
 def _worker_face_detect(args, detector, known_names, known_encodings, frame_queue, stop_event):
     """Run in thread: read stream, detect/recognize faces, push (display_frame, face_crops) to queue."""
     try:
-        for frame in read_frames(args.url):
+        for frame in _get_frame_source(args):
             if stop_event.is_set():
                 break
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -191,14 +200,17 @@ def main():
     if args.recognize:
         known_names, known_encodings = load_known_encodings(args.known_faces)
         print(f"Loaded {len(known_names)} known face(s) from {args.known_faces}")
-    print(f"Connecting to {args.url}")
+    if args.webcam:
+        print(f"Using webcam (device index {args.camera_index})")
+    else:
+        print(f"Connecting to {args.url}")
     if not args.no_window:
         print("Press 'q' in the main window to quit. Each detected face opens in its own window.")
         cv2.namedWindow("Face detection", cv2.WINDOW_NORMAL)
         show_face_windows = not args.no_face_windows
     else:
         show_face_windows = False
-        for frame in read_frames(args.url):
+        for frame in _get_frame_source(args):
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             raw_boxes = detect_faces(gray, detector)
             boxes = [] if raw_boxes is None or len(raw_boxes) == 0 else raw_boxes

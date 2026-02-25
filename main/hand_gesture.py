@@ -2,23 +2,13 @@
 Hand gesture detection from ESP32-CAM stream for LED strip control.
 
 Uses MediaPipe Hands for landmark detection and classifies gestures
-based on finger extension states. Prototype displays debug overlay
-with landmarks, finger states, and detected gesture + mapped LED action.
+based on finger extension states. LED strip actions (when --led-url set):
+  OPEN_HAND   → ON           OK          → OFF
+  THUMB_UP    → BRIGHT+      THUMB_DOWN  → BRIGHT-
+  POINTER     → fun mode (1 or 2 islands)   PINCH → explosion
 
-Gestures detected:
-  FIST        → OFF          OPEN_HAND   → ON
-  THUMB_UP    → BRIGHT+      POINTER     → SELECT
-  PEACE       → NEXT MODE    THREE       → MODE 3
-  FOUR        → MODE 4       ROCK        → EFFECT
-  PINCH       → ADJUST       OK          → CONFIRM
-
-Controls:
-  q  – quit
-  m  – toggle mirror
-
-Source: use --url for ESP32-CAM stream (default) or --webcam for local webcam.
-
-LED strip: --led-url set. Open palm = on, fist = off. POINTER (index) = fun mode: cluster follows finger X, color from finger Y.
+Controls: q = quit, m = toggle mirror.
+Source: --url for ESP32-CAM stream (default) or --webcam for local webcam.
 """
 
 import sys
@@ -72,18 +62,12 @@ RING_MCP, RING_PIP, RING_DIP, RING_TIP = 13, 14, 15, 16
 PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP = 17, 18, 19, 20
 
 GESTURE_ACTIONS = {
-    "FIST": "OFF",
     "OPEN_HAND": "ON",
+    "OK": "OFF",
     "THUMB_UP": "BRIGHT+",
+    "THUMB_DOWN": "BRIGHT-",
     "POINTER": "SELECT",
-    "PEACE": "NEXT MODE",
-    "THREE": "MODE 3",
-    "FOUR": "MODE 4",
-    "ROCK": "EFFECT",
-    "PINCH": "ADJUST",
-    "OK": "CONFIRM",
-    "L": "L",
-    "HANG_LOOSE": "CHILL",
+    "PINCH": "EXPLOSION",
 }
 
 COLOR_CYAN = (255, 255, 0)
@@ -95,6 +79,8 @@ COLOR_BG = (40, 40, 40)
 DEBOUNCE_FRAMES = 3
 LED_DEBOUNCE_FRAMES = 5  # require this many same gesture before changing strip (reduces flicker)
 FUN_THROTTLE_SEC = 1.0 / 15.0  # max 15 Hz for /fun position updates
+BRIGHTNESS_THROTTLE_SEC = 0.25  # min interval between brightness up/down steps
+EXPLOSION_THROTTLE_SEC = 0.5   # min interval between pinch-triggered explosions
 
 # Hand landmarker model (downloaded on first run)
 HAND_LANDMARKER_MODEL_URL = (
@@ -119,13 +105,13 @@ def _get_model_path():
         ) from e
 
 
-def _draw_hand_landmarks(frame, landmarks_list, height, width, color=(0, 255, 0), thickness=2):
-    """Draw hand skeleton and points on frame. landmarks_list: list of 21 normalized (x,y,z) landmarks."""
+def _draw_hand_landmarks(frame, landmarks_list, height, width, color=(0, 255, 0), thickness=2, mirror=False):
+    """Draw hand skeleton and points on frame. landmarks_list: list of 21 normalized (x,y,z) landmarks. If mirror, flip x so text stays readable."""
     if not landmarks_list or len(landmarks_list) < 21:
         return
     pts = []
     for lm in landmarks_list:
-        x = int(lm.x * width)
+        x = int((1 - lm.x) * width if mirror else lm.x * width)
         y = int(lm.y * height)
         pts.append((x, y))
     for (i, j) in HAND_CONNECTIONS:
@@ -195,6 +181,9 @@ def classify_gesture(finger_states, hand_landmarks):
     if n_up >= 4:
         return "OPEN_HAND"
     if thumb and not any([index, middle, ring, pinky]):
+        # Thumb down = tip has higher y than IP (image y increases downward)
+        if lm[THUMB_TIP].y > lm[THUMB_IP].y:
+            return "THUMB_DOWN"
         return "THUMB_UP"
     # POINTER = index up, other fingers (except thumb) down; thumb can be up (avoids L when pointing)
     if index and not middle and not ring and not pinky:
@@ -282,7 +271,7 @@ def _send_led_command(base_url, on: bool, timeout=2.0):
 
 
 def _send_led_fun(base_url, position_pct: int, hue: int, timeout=1.0):
-    """Send GET /fun?p=position_pct&h=hue for moving cluster (fun mode)."""
+    """Send GET /fun?p=position_pct&h=hue for one moving cluster (fun mode)."""
     if not base_url or not requests:
         return False
     base_url = base_url.strip().rstrip("/")
@@ -300,7 +289,110 @@ def _send_led_fun(base_url, position_pct: int, hue: int, timeout=1.0):
         return False
 
 
-def _worker(args, frame_queue, stop_event):
+def _send_led_fun_two(base_url, p1: int, h1: int, p2: int, h2: int, timeout=1.0):
+    """Send GET /fun?p=&h=&p2=&h2= for two islands of light (two hands POINTER)."""
+    if not base_url or not requests:
+        return False
+    base_url = base_url.strip().rstrip("/")
+    if not base_url:
+        return False
+    p1, p2 = max(0, min(100, p1)), max(0, min(100, p2))
+    h1, h2 = max(0, min(360, h1)), max(0, min(360, h2))
+    url = f"{base_url}/fun?p={p1}&h={h1}&p2={p2}&h2={h2}"
+    try:
+        r = requests.get(url, timeout=timeout)
+        r.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"[led] fun two {url}: {e}", flush=True)
+        return False
+
+
+def _send_led_brightness_up(base_url, timeout=1.0):
+    """Send GET /brightness/up to increase strip brightness."""
+    if not base_url or not requests:
+        return False
+    base_url = base_url.strip().rstrip("/")
+    if not base_url:
+        return False
+    try:
+        r = requests.get(base_url + "/brightness/up", timeout=timeout)
+        r.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"[led] brightness/up: {e}", flush=True)
+        return False
+
+
+def _send_led_brightness_down(base_url, timeout=1.0):
+    """Send GET /brightness/down to decrease strip brightness (ESP32 enforces minimum)."""
+    if not base_url or not requests:
+        return False
+    base_url = base_url.strip().rstrip("/")
+    if not base_url:
+        return False
+    try:
+        r = requests.get(base_url + "/brightness/down", timeout=timeout)
+        r.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"[led] brightness/down: {e}", flush=True)
+        return False
+
+
+def _send_led_explosion(base_url, p: int, h: int, timeout=1.0):
+    """Send GET /explosion?p=&h= to trigger explosion from hand 0 position."""
+    if not base_url or not requests:
+        return False
+    base_url = base_url.strip().rstrip("/")
+    if not base_url:
+        return False
+    p, h = max(0, min(100, p)), max(0, min(360, h))
+    try:
+        r = requests.get(f"{base_url}/explosion?p={p}&h={h}", timeout=timeout)
+        r.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"[led] explosion: {e}", flush=True)
+        return False
+
+
+def _send_led_explosion_hand1(base_url, p2: int, h2: int, timeout=1.0):
+    """Send GET /explosion?p2=&h2= to trigger explosion from hand 1 position only."""
+    if not base_url or not requests:
+        return False
+    base_url = base_url.strip().rstrip("/")
+    if not base_url:
+        return False
+    p2, h2 = max(0, min(100, p2)), max(0, min(360, h2))
+    try:
+        r = requests.get(f"{base_url}/explosion?p2={p2}&h2={h2}", timeout=timeout)
+        r.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"[led] explosion hand1: {e}", flush=True)
+        return False
+
+
+def _send_led_explosion_two(base_url, p1: int, h1: int, p2: int, h2: int, timeout=1.0):
+    """Send GET /explosion?p1=&h1=&p2=&h2= to trigger explosions from both hands."""
+    if not base_url or not requests:
+        return False
+    base_url = base_url.strip().rstrip("/")
+    if not base_url:
+        return False
+    p1, p2 = max(0, min(100, p1)), max(0, min(100, p2))
+    h1, h2 = max(0, min(360, h1)), max(0, min(360, h2))
+    try:
+        r = requests.get(f"{base_url}/explosion?p1={p1}&h1={h1}&p2={p2}&h2={h2}", timeout=timeout)
+        r.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"[led] explosion two: {e}", flush=True)
+        return False
+
+
+def _worker(args, frame_queue, stop_event, mirror_ref=None):
     """Read stream, detect hands, classify gestures, push annotated frames."""
     model_path = _get_model_path()
     options = HandLandmarkerOptions(
@@ -313,17 +405,19 @@ def _worker(args, frame_queue, stop_event):
 
     debounce_hist = {}
     stable = {}
-    last_print = 0
     frame_timestamp_ms = 0
     last_led_state = None  # "on", "off", or None
-    led_gesture_hist = []  # recent gestures for first hand (longer debounce for strip)
+    led_gesture_hist = {}  # per-hand: recent gestures (longer debounce for strip)
     last_fun_sent = 0.0
+    last_brightness_sent = 0.0
+    last_explosion_sent = 0.0
 
     try:
         for frame in _get_frame_source(args):
             if stop_event.is_set():
                 break
 
+            mirror = mirror_ref[0] if mirror_ref else False
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w = frame.shape[:2]
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
@@ -331,14 +425,19 @@ def _worker(args, frame_queue, stop_event):
             frame_timestamp_ms += 33  # ~30 fps
 
             out = frame.copy()
+            if mirror:
+                out = cv2.flip(out, 1)
             hand_data = []
             first_hand_landmarks = None
+            second_hand_landmarks = None
 
             if result.hand_landmarks:
                 for i, (landmarks_list, handedness_list) in enumerate(zip(result.hand_landmarks, result.handedness)):
                     if i == 0:
                         first_hand_landmarks = landmarks_list
-                    _draw_hand_landmarks(out, landmarks_list, h, w)
+                    elif i == 1:
+                        second_hand_landmarks = landmarks_list
+                    _draw_hand_landmarks(out, landmarks_list, h, w, mirror=mirror)
 
                     label = handedness_list[0].display_name if handedness_list else "Unknown"
                     score = handedness_list[0].score if handedness_list else 0.0
@@ -360,24 +459,77 @@ def _worker(args, frame_queue, stop_event):
                     action = GESTURE_ACTIONS.get(display_gesture, "-")
                     hand_data.append((display_gesture, action, fingers, label, score))
 
-                # LED strip: open palm = on, fist = off; POINTER = fun mode (cluster position + hue)
+                # LED strip: open palm = on, OK = off; thumbs = brightness; POINTER = fun (1 or 2 islands)
                 if args.led_url and hand_data:
-                    g = hand_data[0][0]
-                    led_gesture_hist.append(g)
-                    if len(led_gesture_hist) > LED_DEBOUNCE_FRAMES:
-                        led_gesture_hist.pop(0)
-                    if len(led_gesture_hist) == LED_DEBOUNCE_FRAMES and len(set(led_gesture_hist)) == 1:
-                        g_stable = led_gesture_hist[0]
-                        want = None
-                        if g_stable == "OPEN_HAND":
-                            want = "on"
-                        elif g_stable == "FIST":
-                            want = "off"
-                        if want is not None and last_led_state != want:
-                            _send_led_command(args.led_url, want == "on")
-                            last_led_state = want
-                        elif g_stable == "POINTER" and first_hand_landmarks and len(first_hand_landmarks) > INDEX_TIP:
-                            now = time.time()
+                    for i in range(len(hand_data)):
+                        g = hand_data[i][0]
+                        hist = led_gesture_hist.get(i, [])
+                        hist.append(g)
+                        if len(hist) > LED_DEBOUNCE_FRAMES:
+                            hist = hist[-LED_DEBOUNCE_FRAMES:]
+                        led_gesture_hist[i] = hist
+                    for k in list(led_gesture_hist):
+                        if k >= len(hand_data):
+                            del led_gesture_hist[k]
+
+                    g0_stable = None
+                    if len(led_gesture_hist.get(0, [])) == LED_DEBOUNCE_FRAMES and len(set(led_gesture_hist[0])) == 1:
+                        g0_stable = led_gesture_hist[0][0]
+                    g1_stable = None
+                    if len(led_gesture_hist.get(1, [])) == LED_DEBOUNCE_FRAMES and len(set(led_gesture_hist[1])) == 1:
+                        g1_stable = led_gesture_hist[1][0]
+
+                    if g0_stable == "OPEN_HAND" and last_led_state != "on":
+                        _send_led_command(args.led_url, True)
+                        last_led_state = "on"
+                    elif g0_stable == "OK" and last_led_state != "off":
+                        _send_led_command(args.led_url, False)
+                        last_led_state = "off"
+                    else:
+                        now = time.time()
+                        if g0_stable == "THUMB_UP" and now - last_brightness_sent >= BRIGHTNESS_THROTTLE_SEC:
+                            if _send_led_brightness_up(args.led_url):
+                                last_brightness_sent = now
+                        elif g0_stable == "THUMB_DOWN" and now - last_brightness_sent >= BRIGHTNESS_THROTTLE_SEC:
+                            if _send_led_brightness_down(args.led_url):
+                                last_brightness_sent = now
+                        if now - last_explosion_sent >= EXPLOSION_THROTTLE_SEC:
+                            pinch0 = g0_stable == "PINCH" and first_hand_landmarks and len(first_hand_landmarks) > INDEX_TIP
+                            pinch1 = g1_stable == "PINCH" and second_hand_landmarks and len(second_hand_landmarks) > INDEX_TIP
+                            if pinch0 and pinch1:
+                                lm0 = first_hand_landmarks[INDEX_TIP]
+                                lm1 = second_hand_landmarks[INDEX_TIP]
+                                p1 = max(0, min(100, int(lm0.x * 100)))
+                                h1 = max(0, min(360, int(lm0.y * 360) % 360))
+                                p2 = max(0, min(100, int(lm1.x * 100)))
+                                h2 = max(0, min(360, int(lm1.y * 360) % 360))
+                                if _send_led_explosion_two(args.led_url, p1, h1, p2, h2):
+                                    last_explosion_sent = now
+                            elif pinch0:
+                                lm = first_hand_landmarks[INDEX_TIP]
+                                p0 = max(0, min(100, int(lm.x * 100)))
+                                h0 = max(0, min(360, int(lm.y * 360) % 360))
+                                if _send_led_explosion(args.led_url, p0, h0):
+                                    last_explosion_sent = now
+                            elif pinch1:
+                                lm = second_hand_landmarks[INDEX_TIP]
+                                p1 = max(0, min(100, int(lm.x * 100)))
+                                h1 = max(0, min(360, int(lm.y * 360) % 360))
+                                if _send_led_explosion_hand1(args.led_url, p1, h1):
+                                    last_explosion_sent = now
+                        if (g0_stable == "POINTER" and g1_stable == "POINTER" and first_hand_landmarks
+                                and second_hand_landmarks and len(first_hand_landmarks) > INDEX_TIP
+                                and len(second_hand_landmarks) > INDEX_TIP):
+                            if now - last_fun_sent >= FUN_THROTTLE_SEC:
+                                lm0 = first_hand_landmarks[INDEX_TIP]
+                                lm1 = second_hand_landmarks[INDEX_TIP]
+                                p1 = max(0, min(100, int(lm0.x * 100)))
+                                h1 = max(0, min(360, int(lm0.y * 360) % 360))
+                                p2 = max(0, min(100, int(lm1.x * 100)))
+                                h2 = max(0, min(360, int(lm1.y * 360) % 360))
+                                if _send_led_fun_two(args.led_url, p1, h1, p2, h2):
+                                    last_fun_sent = now
+                        elif g0_stable == "POINTER" and first_hand_landmarks and len(first_hand_landmarks) > INDEX_TIP:
                             if now - last_fun_sent >= FUN_THROTTLE_SEC:
                                 lm = first_hand_landmarks[INDEX_TIP]
                                 position_pct = max(0, min(100, int(lm.x * 100)))
@@ -385,13 +537,7 @@ def _worker(args, frame_queue, stop_event):
                                 if _send_led_fun(args.led_url, position_pct, hue):
                                     last_fun_sent = now
             else:
-                led_gesture_hist = []
-
-                now = time.time()
-                if now - last_print > 0.5 and hand_data:
-                    parts = [f"{lbl}: {g} -> {a}" for g, a, _, lbl, _ in hand_data]
-                    print(f"[gesture] {' | '.join(parts)}")
-                    last_print = now
+                led_gesture_hist = {}
 
             n_hands = len(hand_data)
             for k in list(debounce_hist):
@@ -454,9 +600,9 @@ def main():
         print(f"Using webcam (device index {args.camera_index})")
     else:
         print(f"Connecting to {args.url}")
-    print("Gestures: FIST=OFF  OPEN_HAND=ON  THUMB_UP=BRIGHT+  POINTER=SELECT  PEACE=NEXT")
+    print("Gestures: OPEN_HAND=ON  OK=OFF  THUMB_UP=BRIGHT+  THUMB_DOWN=BRIGHT-  POINTER=fun  PINCH=explosion")
     if args.led_url:
-        print(f"LED strip: {args.led_url}  Open palm = ON, Fist = OFF")
+        print(f"LED strip: {args.led_url}  Open palm = ON, OK = OFF")
         if not requests:
             print("WARNING: install 'requests' to control LED strip over WiFi.")
 
@@ -469,9 +615,11 @@ def main():
             min_hand_detection_confidence=args.min_confidence,
         )
         landmarker = HandLandmarker.create_from_options(options)
-        debounce_hist = []
+        led_gesture_hist = {}
         last_led_state = None
         last_fun_sent = 0.0
+        last_brightness_sent = 0.0
+        last_explosion_sent = 0.0
         try:
             ts = 0
             for frame in _get_frame_source(args):
@@ -480,43 +628,91 @@ def main():
                 result = landmarker.detect_for_video(mp_image, ts)
                 ts += 33
                 if result.hand_landmarks:
-                    # Use first hand for display and LED
-                    landmarks_list = result.hand_landmarks[0]
-                    handedness_list = result.handedness[0] if result.handedness else []
-                    label = handedness_list[0].display_name if handedness_list else "Unknown"
-                    hand_lm = _landmarks_wrapper(landmarks_list)
-                    fingers = get_finger_states(hand_lm, label)
-                    gesture = classify_gesture(fingers, hand_lm)
-                    action = GESTURE_ACTIONS.get(gesture, "-")
-                    print(f"{label}: {gesture} -> {action}")
-                    # LED: open palm = on, fist = off; POINTER = fun mode
-                    debounce_hist.append(gesture)
-                    if len(debounce_hist) > LED_DEBOUNCE_FRAMES:
-                        debounce_hist = debounce_hist[-LED_DEBOUNCE_FRAMES:]
-                    if len(debounce_hist) == LED_DEBOUNCE_FRAMES and len(set(debounce_hist)) == 1:
-                        g = debounce_hist[-1]
-                        if g == "OPEN_HAND" and last_led_state != "on" and args.led_url:
+                    hand_gestures = []
+                    hand_landmarks_list = []
+                    for i, (landmarks_list, handedness_list) in enumerate(zip(result.hand_landmarks, result.handedness or [])):
+                        label = handedness_list[0].display_name if handedness_list else "Unknown"
+                        hand_lm = _landmarks_wrapper(landmarks_list)
+                        fingers = get_finger_states(hand_lm, label)
+                        gesture = classify_gesture(fingers, hand_lm)
+                        action = GESTURE_ACTIONS.get(gesture, "-")
+                        print(f"{label}: {gesture} -> {action}")
+                        hand_gestures.append(gesture)
+                        hand_landmarks_list.append(landmarks_list)
+                    if args.led_url and hand_gestures:
+                        for i in range(len(hand_gestures)):
+                            hist = led_gesture_hist.get(i, [])
+                            hist.append(hand_gestures[i])
+                            if len(hist) > LED_DEBOUNCE_FRAMES:
+                                hist = hist[-LED_DEBOUNCE_FRAMES:]
+                            led_gesture_hist[i] = hist
+                        for k in list(led_gesture_hist):
+                            if k >= len(hand_gestures):
+                                del led_gesture_hist[k]
+                        g0_stable = (led_gesture_hist[0][0] if len(led_gesture_hist.get(0, [])) == LED_DEBOUNCE_FRAMES
+                                    and len(set(led_gesture_hist[0])) == 1 else None)
+                        g1_stable = (led_gesture_hist[1][0] if len(led_gesture_hist.get(1, [])) == LED_DEBOUNCE_FRAMES
+                                    and len(set(led_gesture_hist[1])) == 1 else None)
+                        lm0 = hand_landmarks_list[0] if len(hand_landmarks_list) > 0 else None
+                        lm1 = hand_landmarks_list[1] if len(hand_landmarks_list) > 1 else None
+                        if g0_stable == "OPEN_HAND" and last_led_state != "on":
                             _send_led_command(args.led_url, True)
                             last_led_state = "on"
-                        elif g == "FIST" and last_led_state != "off" and args.led_url:
+                        elif g0_stable == "OK" and last_led_state != "off":
                             _send_led_command(args.led_url, False)
                             last_led_state = "off"
-                        elif g == "POINTER" and len(landmarks_list) > INDEX_TIP and args.led_url:
+                        else:
                             now = time.time()
-                            if now - last_fun_sent >= FUN_THROTTLE_SEC:
-                                lm = landmarks_list[INDEX_TIP]
-                                position_pct = max(0, min(100, int(lm.x * 100)))
-                                hue = max(0, min(360, int(lm.y * 360) % 360))
-                                if _send_led_fun(args.led_url, position_pct, hue):
-                                    last_fun_sent = now
+                            if g0_stable == "THUMB_UP" and now - last_brightness_sent >= BRIGHTNESS_THROTTLE_SEC:
+                                if _send_led_brightness_up(args.led_url):
+                                    last_brightness_sent = now
+                            elif g0_stable == "THUMB_DOWN" and now - last_brightness_sent >= BRIGHTNESS_THROTTLE_SEC:
+                                if _send_led_brightness_down(args.led_url):
+                                    last_brightness_sent = now
+                            if now - last_explosion_sent >= EXPLOSION_THROTTLE_SEC:
+                                pinch0 = g0_stable == "PINCH" and lm0 and len(lm0) > INDEX_TIP
+                                pinch1 = g1_stable == "PINCH" and lm1 and len(lm1) > INDEX_TIP
+                                if pinch0 and pinch1:
+                                    p1 = max(0, min(100, int(lm0[INDEX_TIP].x * 100)))
+                                    h1 = max(0, min(360, int(lm0[INDEX_TIP].y * 360) % 360))
+                                    p2 = max(0, min(100, int(lm1[INDEX_TIP].x * 100)))
+                                    h2 = max(0, min(360, int(lm1[INDEX_TIP].y * 360) % 360))
+                                    if _send_led_explosion_two(args.led_url, p1, h1, p2, h2):
+                                        last_explosion_sent = now
+                                elif pinch0:
+                                    p0 = max(0, min(100, int(lm0[INDEX_TIP].x * 100)))
+                                    h0 = max(0, min(360, int(lm0[INDEX_TIP].y * 360) % 360))
+                                    if _send_led_explosion(args.led_url, p0, h0):
+                                        last_explosion_sent = now
+                                elif pinch1:
+                                    p1 = max(0, min(100, int(lm1[INDEX_TIP].x * 100)))
+                                    h1 = max(0, min(360, int(lm1[INDEX_TIP].y * 360) % 360))
+                                    if _send_led_explosion_hand1(args.led_url, p1, h1):
+                                        last_explosion_sent = now
+                            if (g0_stable == "POINTER" and g1_stable == "POINTER" and lm0 and lm1
+                                    and len(lm0) > INDEX_TIP and len(lm1) > INDEX_TIP):
+                                if now - last_fun_sent >= FUN_THROTTLE_SEC:
+                                    p1 = max(0, min(100, int(lm0[INDEX_TIP].x * 100)))
+                                    h1 = max(0, min(360, int(lm0[INDEX_TIP].y * 360) % 360))
+                                    p2 = max(0, min(100, int(lm1[INDEX_TIP].x * 100)))
+                                    h2 = max(0, min(360, int(lm1[INDEX_TIP].y * 360) % 360))
+                                    if _send_led_fun_two(args.led_url, p1, h1, p2, h2):
+                                        last_fun_sent = now
+                            elif g0_stable == "POINTER" and lm0 and len(lm0) > INDEX_TIP:
+                                if now - last_fun_sent >= FUN_THROTTLE_SEC:
+                                    lm = lm0[INDEX_TIP]
+                                    p1 = max(0, min(100, int(lm.x * 100)))
+                                    h1 = max(0, min(360, int(lm.y * 360) % 360))
+                                    if _send_led_fun(args.led_url, p1, h1):
+                                        last_fun_sent = now
                 else:
-                    debounce_hist = []
+                    led_gesture_hist = {}
         finally:
             if hasattr(landmarker, "close"):
                 landmarker.close()
         return
 
-    mirror = args.mirror
+    mirror_ref = [args.mirror]  # worker reads this so mirror applies before drawing (text stays readable)
     print("Press 'q' to quit, 'm' to toggle mirror.")
     print("Opening Hand Gestures window...")
     sys.stdout.flush()
@@ -524,13 +720,12 @@ def main():
     cv2.namedWindow("Hand Gestures", cv2.WINDOW_NORMAL)
     frame_queue = queue.Queue(maxsize=2)
     stop_event = threading.Event()
-    worker = threading.Thread(target=_worker, args=(args, frame_queue, stop_event), daemon=True)
+    worker = threading.Thread(target=_worker, args=(args, frame_queue, stop_event, mirror_ref), daemon=True)
     worker.start()
 
     last_frame = _placeholder_frame(text="Connecting...")
     stream_ended = False
-    # Show window once before loop so it appears even if worker fails immediately
-    cv2.imshow("Hand Gestures", cv2.flip(last_frame, 1) if mirror else last_frame)
+    cv2.imshow("Hand Gestures", last_frame)
     cv2.waitKey(100)
 
     try:
@@ -555,15 +750,14 @@ def main():
                         display, "Stream ended. Press Q to quit", (20, h // 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2,
                     )
-                display = cv2.flip(display, 1) if mirror else display
                 cv2.imshow("Hand Gestures", display)
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 print("Quit requested by user.")
                 break
             elif key == ord("m"):
-                mirror = not mirror
-                print(f"Mirror: {'ON' if mirror else 'OFF'}")
+                mirror_ref[0] = not mirror_ref[0]
+                print(f"Mirror: {'ON' if mirror_ref[0] else 'OFF'}")
     finally:
         stop_event.set()
         worker.join(timeout=1.0)

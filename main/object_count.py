@@ -18,7 +18,7 @@ import threading
 import cv2
 import numpy as np
 
-from stream_reader import read_frames, add_stream_url_arg, DEFAULT_STREAM_URL
+from stream_reader import read_frames, read_frames_webcam, add_stream_url_arg
 
 
 # Tunables (override via CLI or edit here)
@@ -43,7 +43,16 @@ def parse_args():
     p.add_argument("--no-window", action="store_true", help="Headless: only print count, no imshow")
     p.add_argument("--scale", type=float, default=2.0, help="Display scale (e.g. 2.0 = double size). Default: 2.0")
     p.add_argument("--tolerance", type=int, default=BACKGROUND_TOLERANCE, help="Background tolerance when using click-to-set (default 50)")
+    p.add_argument("--webcam", action="store_true", help="Use local webcam instead of ESP32-CAM stream.")
+    p.add_argument("--camera-index", type=int, default=0, help="Webcam device index (default: 0). Only used with --webcam.")
     return p.parse_args()
+
+
+def _get_frame_source(args):
+    """Return a frame iterator: webcam or stream URL."""
+    if args.webcam:
+        return read_frames_webcam(args.camera_index)
+    return read_frames(args.url)
 
 
 def count_objects(frame, min_area, max_area, blur_ksize, use_otsu, fixed_thresh, invert, background_gray=None, tolerance=BACKGROUND_TOLERANCE):
@@ -85,7 +94,7 @@ def _worker_object_count(args, blur_ksize, use_otsu, frame_queue, stop_event, ui
     """Run in thread: read stream, count objects, push (display_frame, count, raw_frame) to queue."""
     frame_count = 0
     try:
-        for frame in read_frames(args.url):
+        for frame in _get_frame_source(args):
             if stop_event.is_set():
                 break
             frame_count += 1
@@ -129,14 +138,17 @@ def main():
     args = parse_args()
     blur_ksize = (args.blur | 1, args.blur | 1)
     use_otsu = not args.no_otsu
-    print(f"Connecting to {args.url} (min_area={args.min_area}, max_area={args.max_area})")
+    if args.webcam:
+        print(f"Using webcam (device index {args.camera_index}) (min_area={args.min_area}, max_area={args.max_area})")
+    else:
+        print(f"Connecting to {args.url} (min_area={args.min_area}, max_area={args.max_area})")
     if not args.no_window:
         print("Press 'q' to quit. Click on the image to set that color as background for counting.")
         cv2.namedWindow("Object count", cv2.WINDOW_NORMAL)
     else:
         print("Running in headless mode (no window).")
         frame_count = 0
-        for frame in read_frames(args.url):
+        for frame in _get_frame_source(args):
             frame_count += 1
             n, contours, _ = count_objects(
                 frame,
