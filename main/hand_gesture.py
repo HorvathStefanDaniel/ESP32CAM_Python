@@ -90,6 +90,27 @@ HAND_LANDMARKER_MODEL_URL = (
 
 def _get_model_path():
     """Return path to hand_landmarker.task, downloading if needed."""
+    # When packaged as .exe (PyInstaller), look in bundle then next to executable
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+        path = os.path.join(base, "hand_landmarker.task")
+        if os.path.isfile(path):
+            return path
+        path = os.path.join(os.path.dirname(sys.executable), "hand_landmarker.task")
+        if os.path.isfile(path):
+            return path
+        download_dir = os.path.dirname(sys.executable)
+        path = os.path.join(download_dir, "hand_landmarker.task")
+        try:
+            import urllib.request
+            print("Downloading hand_landmarker.model (one-time)...", flush=True)
+            urllib.request.urlretrieve(HAND_LANDMARKER_MODEL_URL, path)
+            return path
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not download hand_landmarker.task: {e}. "
+                "Download manually from MediaPipe and place hand_landmarker.task next to this executable."
+            ) from e
     path = os.path.join(_script_dir, "hand_landmarker.task")
     if os.path.isfile(path):
         return path

@@ -134,13 +134,25 @@ A Windows executable \texttt{run.exe} can be built so that scripts can be starte
 
 The executable is built from \texttt{run\_launcher.py}, which performs the same venv creation, dependency install, and \texttt{PYTHONPATH} setup as \texttt{run.ps1}. \texttt{run.exe} is listed in \texttt{.gitignore}; rebuild after updating \texttt{run\_launcher.py} if you change the launcher behaviour.
 
+\subsection{Portable package (no Python on target PC)}
+To run the project on a Windows PC that does not have Python, CMake, or C++ build tools installed, build a \textbf{portable package} once on a machine that has Python 3.9+ and pip:
+
+\begin{enumerate}
+    \item On a PC with Python installed, open a terminal in the project directory (\texttt{main}).
+    \item Run: \texttt{python build\_portable.py}. The script installs PyInstaller and \texttt{requirements.txt}, then builds standalone \texttt{.exe} files for each script and the launcher. This can take several minutes (especially \texttt{hand\_gesture.exe} with MediaPipe).
+    \item The output folder \texttt{dist\_portable} will contain \texttt{run.exe}, \texttt{hand\_gesture.exe}, \texttt{face\_detect.exe}, \texttt{object\_count.exe}, and \texttt{gesture\_launcher.exe}.
+    \item Copy the entire \texttt{dist\_portable} folder to the target PC (e.g.\ USB stick or network). No Python or other runtimes need to be installed on that PC.
+\end{enumerate}
+
+\textbf{On the target PC:} Double-click \texttt{run.exe} for the interactive menu, or run any script directly (e.g.\ \texttt{hand\_gesture.exe --webcam --led-url http://LED\_IP}). For face recognition, create a \texttt{known\_faces} folder next to the executables and add reference photos. The folder includes \texttt{README\_portable.txt} with short usage notes. Building the portable package is one-time (or after code changes); end users only need the copied folder.
+
 \subsection{Libraries to install}
-\textbf{Python} (install via \texttt{pip install -r requirements.txt} in the project \texttt{.venv}):
+See \textbf{Environment and Dependencies} for what to install (Python version, CMake if needed, and step-by-step setup). Summary of \textbf{Python} packages (install via \texttt{pip install -r requirements.txt} in the project \texttt{.venv}):
 \begin{itemize}
     \item \texttt{opencv-python} ($\geq$4.8.0) -- used by all vision scripts (stream\_reader, object\_count, face\_detect, hand\_gesture)
     \item \texttt{requests} ($\geq$2.28.0) -- HTTP for stream and LED strip
     \item \texttt{mediapipe} ($\geq$0.10.0) -- hand landmarks for \texttt{hand\_gesture.py} (requires Python 3.9+)
-    \item \texttt{face\_recognition} ($\geq$1.3.0) -- optional; uncomment in \texttt{requirements.txt} to enable \texttt{face\_detect.py --recognize}
+    \item \texttt{face\_recognition} ($\geq$1.3.0) -- optional; uncomment in \texttt{requirements.txt} to enable \texttt{face\_detect.py --recognize}. Depends on \texttt{dlib}; on some systems pip may need CMake/C++ tools to build it.
 \end{itemize}
 
 \textbf{Arduino / ESP32} (install via Arduino Library Manager or PlatformIO):
@@ -151,15 +163,34 @@ The executable is built from \texttt{run\_launcher.py}, which performs the same 
 
 \section{Environment and Dependencies}
 
-\subsection{Python}
-Requires Python 3.9+ for \texttt{hand\_gesture.py} (MediaPipe 0.10+).  It has to be installed on the PC before being able to run anything, and it can be installed on windows machines by typing ``python'' in the terminal, which will open the windows app store. 
-\\Then from the project directory:
+\subsection{What you need to install (PC / development)}
+To run the Python scripts on your PC, install the following. If you only want to run the \textbf{portable package} (\texttt{dist\_portable}) on another machine, you do \emph{not} need to install anything on that machine; see the portable package section.
+
+\begin{itemize}
+    \item \textbf{Python 3.9, 3.10, or 3.11} (64-bit recommended). Required for all scripts; \texttt{hand\_gesture.py} and \texttt{gesture\_launcher.py} need at least 3.9 (MediaPipe 0.10+).
+    \begin{itemize}
+        \item \textbf{Windows:} Install from \href{https://www.python.org/downloads/}{python.org} or run \texttt{python} in a terminal to open the Microsoft Store. During setup, enable ``Add Python to PATH''.
+        \item \textbf{Linux/macOS:} Use the system package manager or \href{https://www.python.org/downloads/}{python.org}. Ensure \texttt{python3} and \texttt{pip} are available.
+    \end{itemize}
+    \item \textbf{pip} (Python package installer). Usually included with Python. Check with \texttt{pip --version}.
+    \item \textbf{Python libraries} from \texttt{requirements.txt}: \texttt{opencv-python}, \texttt{requests}, \texttt{mediapipe}. Optional: \texttt{face\_recognition} for face recognition in \texttt{face\_detect.py} (uncomment in \texttt{requirements.txt}). Install with \texttt{pip install -r requirements.txt} inside the project virtual environment (see below).
+    \item \textbf{CMake and C++ build tools} (only if you use \texttt{face\_recognition} and pip cannot install a prebuilt \texttt{dlib} wheel). On Windows, if \texttt{pip install face\_recognition} fails to find a wheel, install \emph{one} of:
+    \begin{itemize}
+        \item \textbf{Visual Studio Build Tools} (\href{https://visualstudio.microsoft.com/visual-cpp-build-tools/}{Build Tools for Visual Studio}) with the ``Desktop development with C++'' workload, or
+        \item \textbf{CMake} (\href{https://cmake.org/download/}{cmake.org}) and a C++ compiler (e.g. MinGW or Visual Studio).
+    \end{itemize}
+    Many users on Windows get a prebuilt \texttt{dlib} wheel and do not need CMake. If \texttt{pip install -r requirements.txt} completes without errors, you can skip this.
+\end{itemize}
+
+\subsection{Python setup (venv and dependencies)}
+From the project directory (\texttt{main}):
 \begin{lstlisting}[language=bash]
 python -m venv .venv
 .venv\Scripts\activate   # Windows
+# source .venv/bin/activate   # Linux/macOS
 pip install -r requirements.txt
 \end{lstlisting}
-\texttt{requirements.txt} includes \texttt{opencv-python}, \texttt{requests}, \texttt{mediapipe}. Uncomment \texttt{face\_recognition} in \texttt{requirements.txt} to enable \texttt{face\_detect.py --recognize}.
+This creates a virtual environment (\texttt{.venv}) and installs \texttt{opencv-python}, \texttt{requests}, \texttt{mediapipe}. To enable face recognition, uncomment \texttt{face\_recognition} in \texttt{requirements.txt} and run \texttt{pip install -r requirements.txt} again.
 
 \subsection{Arduino / ESP32}
 \begin{itemize}
@@ -352,7 +383,7 @@ GET \texttt{/} & Status: \texttt{on} or \texttt{off} (plain text) \\ \bottomrule
 \end{tabular}
 \end{center}
 
-Serial (115200): \texttt{on}, \texttt{off}, \texttt{status} (or \texttt{?}), \texttt{bright+}, \texttt{bright-}.
+Serial (115200): \texttt{on}, \texttt{off}, \texttt{status} / \texttt{?}, \texttt{bright+}, \texttt{bright-}.
 
 \section{Gesture Mapping}
 
@@ -385,7 +416,8 @@ PINCH       & Explosion from hand position (1 or 2 hands) \\
     \item \texttt{run.ps1} -- PowerShell launcher: venv, dependencies, script selection
     \item \texttt{run\_launcher.py} -- Python launcher (same logic as run.ps1; interactive menu for script, webcam, URL, recognition)
     \item \texttt{build\_run\_exe.py} -- Builds \texttt{run.exe} from \texttt{run\_launcher.py} using PyInstaller (run once; \texttt{run.exe} appears in project folder)
-    \item \texttt{run.exe} -- Windows executable (build with \texttt{python build\_run\_exe.py}); double-click for menu or pass script name and args
+    \item \texttt{build\_portable.py} -- Builds a full portable package (\texttt{dist\_portable/}) with standalone \texttt{.exe} files so no Python is needed on the target PC
+    \item \texttt{run.exe} -- Windows executable (build with \texttt{python build\_run\_exe.py} or \texttt{build\_portable.py}); double-click for menu or pass script name and args; in \texttt{dist\_portable} it runs the sibling script \texttt{.exe} files without Python
     \item \texttt{requirements.txt} -- Python dependencies (opencv-python, requests, mediapipe; optional face\_recognition)
     \item \texttt{secrets.h} -- WiFi credentials for both ESP32 sketches (not in repo; add locally)
 \end{itemize}

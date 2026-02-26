@@ -20,10 +20,24 @@ import numpy as np
 
 from stream_reader import read_frames, read_frames_webcam, add_stream_url_arg
 
-# OpenCV Haar cascade (shipped with opencv-python)
-CASCADE_PATH = os.path.join(
-    os.path.dirname(cv2.__file__), "data", "haarcascade_frontalface_default.xml"
-)
+
+def _get_cascade_path():
+    """Path to Haar cascade; works when run as script or as PyInstaller-frozen exe."""
+    # Normal: opencv-python ships it in cv2/data/
+    default = os.path.join(os.path.dirname(cv2.__file__), "data", "haarcascade_frontalface_default.xml")
+    if os.path.isfile(default):
+        return default
+    # Frozen exe: PyInstaller may put add-data in _MEIPASS or bundle cv2 elsewhere
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+        for candidate in (
+            os.path.join(base, "haarcascade_frontalface_default.xml"),
+            os.path.join(base, "cv2", "data", "haarcascade_frontalface_default.xml"),
+            os.path.join(os.path.dirname(sys.executable), "haarcascade_frontalface_default.xml"),
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+    return default
 
 
 def parse_args():
@@ -55,9 +69,10 @@ def _get_frame_source(args):
 
 
 def load_face_detector():
-    if not os.path.isfile(CASCADE_PATH):
-        raise FileNotFoundError(f"Haar cascade not found: {CASCADE_PATH}")
-    return cv2.CascadeClassifier(CASCADE_PATH)
+    cascade_path = _get_cascade_path()
+    if not os.path.isfile(cascade_path):
+        raise FileNotFoundError(f"Haar cascade not found: {cascade_path}")
+    return cv2.CascadeClassifier(cascade_path)
 
 
 def load_known_encodings(known_faces_dir):
@@ -270,4 +285,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        print("Face detect error:", file=sys.stderr)
+        traceback.print_exc()
+        if getattr(sys, "frozen", False):
+            input("Press Enter to close...")
+        raise

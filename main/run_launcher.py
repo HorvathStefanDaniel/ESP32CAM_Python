@@ -91,6 +91,13 @@ def main():
             print("Invalid input.", file=sys.stderr)
             sys.exit(1)
 
+    # Portable mode: when this launcher is run as run.exe, prefer sibling script.exe if present (no Python needed)
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        script_exe = os.path.join(project_dir, f"{script}.exe")
+        if os.path.isfile(script_exe):
+            r = subprocess.run([script_exe] + script_args, cwd=project_dir)
+            sys.exit(r.returncode)
+
     # Create venv if missing
     if not os.path.isfile(python_exe):
         print("Creating virtual environment in .venv ...")

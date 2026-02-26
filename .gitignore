@@ -61,7 +61,11 @@ Desktop.ini
 # ----- Launcher exe (build with: python build_run_exe.py) -----
 main/run.exe
 
+# ----- Portable package (build with: python build_portable.py) -----
+main/dist_portable/
+
 # ----- Optional: uncomment if you use these -----
 # *.mp4
 # *.avi
 # captures/
+main/dist_portable.zip

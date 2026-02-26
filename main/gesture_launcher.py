@@ -14,7 +14,14 @@ except ImportError:
     print("tkinter not available. Use: python hand_gesture.py --url http://CAM_IP/stream --led-url http://LED_IP")
     sys.exit(1)
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+def _base_dir():
+    """Directory containing the script or, when frozen, the executable (for sibling .exe and config)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+SCRIPT_DIR = _base_dir()
 CONFIG_FILE = os.path.join(SCRIPT_DIR, ".gesture_launcher_config.txt")
 
 
@@ -71,11 +78,19 @@ def start_gesture():
         messagebox.showwarning("Missing IP", "Enter the Camera IP or check 'Use webcam'.")
         return
 
-    args = [
-        sys.executable,
-        os.path.join(SCRIPT_DIR, "hand_gesture.py"),
-        "--led-url", led,
-    ]
+    # When packaged as .exe, run sibling hand_gesture.exe; otherwise run Python + hand_gesture.py
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        hand_exe = os.path.join(SCRIPT_DIR, "hand_gesture.exe")
+        if os.path.isfile(hand_exe):
+            args = [hand_exe, "--led-url", led]
+        else:
+            args = [sys.executable, os.path.join(SCRIPT_DIR, "hand_gesture.py"), "--led-url", led]
+    else:
+        args = [
+            sys.executable,
+            os.path.join(SCRIPT_DIR, "hand_gesture.py"),
+            "--led-url", led,
+        ]
     if webcam:
         args.append("--webcam")
     else:
