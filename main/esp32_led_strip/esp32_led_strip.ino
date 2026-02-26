@@ -14,6 +14,9 @@
  * HTTP: GET /on, GET /off, GET /fun?p=50&h=180, GET /explosion?p=50&h=180, GET /
  *   /fun: p = position 0-100, h = hue 0-360 (cluster); optional p2, h2 for second hand
  *   /explosion: p,h = start; 3 pixels move to each end and stack there (Tetris-style). Ignore repeat pinch until done; 2 hands OK.
+ *   /rainbow or /groovy: whole strip rainbow effect (persistent mode like on/off).
+ *   /mode?m=on|off|rainbow: set whole strip to one mode.
+ *   /split?left=on|off|rainbow&right=on|off|rainbow: left half = left mode, right half = right mode (two-hand control).
  * Serial (115200): send "on", "off", "status"
  */
 
@@ -43,6 +46,17 @@ uint8_t funNumIslands = 0;   // 0 = solid, 1 or 2 = islands
 int funPos[2] = { 0, 0 };   // position 0-100 per island
 uint16_t funHue[2] = { 0, 0 };
 
+// Strip mode: 0=off, 1=on (solid), 2=rainbow. When splitActive, left half = leftMode, right half = rightMode.
+#define MODE_OFF 0
+#define MODE_ON  1
+#define MODE_RAINBOW 2
+uint8_t leftMode = MODE_OFF;
+uint8_t rightMode = MODE_OFF;
+bool splitActive = false;
+uint16_t rainbowOffset = 0;  // advances each frame for flowing rainbow
+unsigned long lastRainbowMs = 0;
+#define RAINBOW_MS_PER_TICK 50
+
 // Explosion: 3 pixels move to each end and stack there (Tetris-style). One pinch per hand until done.
 bool explosionActive[2] = { false, false };
 int explosionCenter[2] = { 0, 0 };
@@ -64,6 +78,9 @@ static void setLights(bool on) {
   lightsOn = on;
 #if USE_WS2812
   if (!on) {
+    leftMode = MODE_OFF;
+    rightMode = MODE_OFF;
+    splitActive = false;
     funNumIslands = 0;
     explosionActive[0] = explosionActive[1] = false;
     explosionLeftActive[0] = explosionLeftActive[1] = false;
@@ -71,6 +88,10 @@ static void setLights(bool on) {
     leftStackCount = 0;
     rightStackCount = 0;
     memset(stackedColor, 0, sizeof(stackedColor));
+  } else {
+    leftMode = MODE_ON;
+    rightMode = MODE_ON;
+    splitActive = false;
   }
   drawAll();
   Serial.printf("[LED] %s -> %d LEDs %s\n", on ? "ON " : "OFF", NUM_LEDS, on ? "on" : "off");
@@ -82,9 +103,19 @@ static void setLights(bool on) {
 
 void handleOn() {
 #if USE_WS2812
-  funNumIslands = 0;  // solid white until next /fun
+  funNumIslands = 0;
+  explosionActive[0] = explosionActive[1] = false;
+  explosionLeftActive[0] = explosionLeftActive[1] = false;
+  explosionRightActive[0] = explosionRightActive[1] = false;
+  leftStackCount = 0;
+  rightStackCount = 0;
+  memset(stackedColor, 0, sizeof(stackedColor));
+  leftMode = MODE_ON;
+  rightMode = MODE_ON;
+  splitActive = false;
+  lightsOn = true;
+  drawAll();
 #endif
-  setLights(true);
   server.send(200, "text/plain", "OK on");
 }
 
@@ -92,6 +123,58 @@ void handleOff() {
   setLights(false);
   server.send(200, "text/plain", "OK off");
 }
+
+#if USE_WS2812
+// Draw rainbow in range [start, start+count), hue offset by rainbowOffset (0..3600 = 10 full cycles per strip)
+static void drawRainbowRange(int start, int count) {
+  for (int i = 0; i < count && (start + i) < NUM_LEDS; i++) {
+    uint16_t hue = ((unsigned long)(start + i) * 360UL / (NUM_LEDS > 0 ? NUM_LEDS : 1) + rainbowOffset) % 360;
+    strip.setPixelColor(start + i, hueToColor(hue));
+  }
+}
+
+static void parseModeArg(const String& arg, uint8_t* out) {
+  String a = arg;
+  a.trim();
+  a.toLowerCase();
+  if (a == "off") *out = MODE_OFF;
+  else if (a == "rainbow" || a == "groovy") *out = MODE_RAINBOW;
+  else *out = MODE_ON;  // "on" or anything else
+}
+
+void handleRainbow() {
+  leftMode = MODE_RAINBOW;
+  rightMode = MODE_RAINBOW;
+  splitActive = false;
+  funNumIslands = 0;
+  lightsOn = true;
+  drawAll();
+  server.send(200, "text/plain", "OK rainbow");
+}
+
+void handleMode() {
+  String m = server.arg("m");
+  parseModeArg(m, &leftMode);
+  rightMode = leftMode;
+  splitActive = false;
+  funNumIslands = 0;
+  lightsOn = (leftMode != MODE_OFF);
+  drawAll();
+  server.send(200, "text/plain", "OK mode");
+}
+
+void handleSplit() {
+  String l = server.arg("left");
+  String r = server.arg("right");
+  parseModeArg(l, &leftMode);
+  parseModeArg(r, &rightMode);
+  splitActive = true;
+  funNumIslands = 0;
+  lightsOn = (leftMode != MODE_OFF || rightMode != MODE_OFF);
+  drawAll();
+  server.send(200, "text/plain", "OK split");
+}
+#endif
 
 #if USE_WS2812
 // Hue 0-360 -> R,G,B (S=255, V=255), scaled by LED_BRIGHTNESS. NEO_GRB order.
@@ -125,16 +208,29 @@ static void drawCluster(int center, uint32_t color) {
 }
 
 static void drawAll() {
-  if (!lightsOn) {
-    strip.fill(0);
-  } else if (funNumIslands > 0) {
-    strip.fill(0);
-    for (uint8_t i = 0; i < funNumIslands; i++) {
-      int center = (int)((funPos[i] / 100.0f) * (NUM_LEDS - 1) + 0.5f);
-      drawCluster(center, hueToColor(funHue[i]));
+  strip.fill(0);
+  if (lightsOn) {
+    int mid = NUM_LEDS / 2;
+    uint32_t white = strip.Color(currentBrightness, currentBrightness, currentBrightness);
+    if (splitActive) {
+      if (leftMode == MODE_RAINBOW) drawRainbowRange(0, mid);
+      else if (leftMode == MODE_ON) for (int i = 0; i < mid; i++) strip.setPixelColor(i, white);
+      if (rightMode == MODE_RAINBOW) drawRainbowRange(mid, NUM_LEDS - mid);
+      else if (rightMode == MODE_ON) for (int i = mid; i < NUM_LEDS; i++) strip.setPixelColor(i, white);
+    } else {
+      if (leftMode == MODE_RAINBOW) {
+        drawRainbowRange(0, NUM_LEDS);
+      } else if (leftMode == MODE_ON) {
+        if (funNumIslands > 0) {
+          for (uint8_t i = 0; i < funNumIslands; i++) {
+            int center = (int)((funPos[i] / 100.0f) * (NUM_LEDS - 1) + 0.5f);
+            drawCluster(center, hueToColor(funHue[i]));
+          }
+        } else {
+          strip.fill(white);
+        }
+      }
     }
-  } else {
-    strip.fill(strip.Color(currentBrightness, currentBrightness, currentBrightness));
   }
   // Stacked pixels at ends (Tetris-style: left stack then right stack)
   for (int i = 0; i < NUM_LEDS; i++) {
@@ -356,6 +452,10 @@ void setup() {
   server.on("/on", HTTP_GET, handleOn);
   server.on("/off", HTTP_GET, handleOff);
 #if USE_WS2812
+  server.on("/rainbow", HTTP_GET, handleRainbow);
+  server.on("/groovy", HTTP_GET, handleRainbow);
+  server.on("/mode", HTTP_GET, handleMode);
+  server.on("/split", HTTP_GET, handleSplit);
   server.on("/fun", HTTP_GET, handleFun);
   server.on("/explosion", HTTP_GET, handleExplosion);
   server.on("/brightness/up", HTTP_GET, handleBrightnessUp);
@@ -369,14 +469,24 @@ void loop() {
   server.handleClient();
 
 #if USE_WS2812
+  unsigned long now = millis();
+  bool needRedraw = false;
   if (explosionActive[0] || explosionActive[1]) {
-    unsigned long now = millis();
     if (now - lastDrawMs >= (1000 / EXPLOSION_FPS)) {
       updateExplosion();
-      drawAll();
+      needRedraw = true;
       lastDrawMs = now;
     }
   }
+  // Advance rainbow animation when any half is in rainbow mode
+  if (leftMode == MODE_RAINBOW || rightMode == MODE_RAINBOW) {
+    if (now - lastRainbowMs >= RAINBOW_MS_PER_TICK) {
+      rainbowOffset = (rainbowOffset + 2) % 360;  // slow drift
+      lastRainbowMs = now;
+      needRedraw = true;
+    }
+  }
+  if (needRedraw) drawAll();
 #endif
 
   // Serial debug: line-based commands

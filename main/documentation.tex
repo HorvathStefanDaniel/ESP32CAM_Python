@@ -375,6 +375,9 @@ The ESP32 LED strip controller (\texttt{esp32\_led\_strip.ino}) exposes:
 \textbf{Endpoint} & \textbf{Description} \\ \midrule
 GET \texttt{/on}  & Lights on (solid or last fun state) \\
 GET \texttt{/off} & Lights off \\
+GET \texttt{/rainbow} or \texttt{/groovy} & Whole strip rainbow effect (persistent mode) \\
+GET \texttt{/mode?m=on|off|rainbow} & Set whole strip to one mode \\
+GET \texttt{/split?left=L\&right=R} & Left half mode \texttt{L}, right half mode \texttt{R} (\texttt{L},\texttt{R} = \texttt{on}, \texttt{off}, or \texttt{rainbow}) \\
 GET \texttt{/fun?p=P\&h=H} & One moving cluster: position \texttt{P} (0--100), hue \texttt{H} (0--360) \\
 GET \texttt{/fun?p=P\&h=H\&p2=P2\&h2=H2} & Two clusters (e.g.\ two hands) \\
 GET \texttt{/brightness/up}   & Increase brightness \\
@@ -393,15 +396,17 @@ Hand gestures that control the LED strip (only these are sent to the strip):
 \begin{tabular}{@{}ll@{}}
 \toprule
 \textbf{Gesture} & \textbf{Action} \\ \midrule
-OPEN\_HAND  & ON \\
-OK          & OFF \\
-THUMB\_UP   & BRIGHT+ \\
-THUMB\_DOWN & BRIGHT- \\
-POINTER     & Fun mode: 1 or 2 moving clusters by hand count (index position and hue) \\
-PINCH       & Explosion from hand position (1 or 2 hands) \\
+OPEN\_HAND   & ON (whole strip or left/right half in split) \\
+OK           & OFF (whole strip or half) \\
+HANG\_LOOSE  & Rainbow mode (thumb + pinky; groovy/chill; whole strip or half) \\
+THUMB\_UP    & BRIGHT+ \\
+THUMB\_DOWN  & BRIGHT- \\
+POINTER      & Fun mode: 1 or 2 moving clusters by hand count (index position and hue) \\
+PINCH        & Explosion from hand position (1 or 2 hands) \\
 \bottomrule
 \end{tabular}
 \end{center}
+\textbf{One hand:} the whole strip follows that gesture (on, off, or rainbow). \textbf{Two hands} (both showing a mode gesture): left half follows hand 0, right half follows hand 1 (e.g.\ left OK + right open palm = left half off, right half on).
 
 \section{File and Module Overview}
 
