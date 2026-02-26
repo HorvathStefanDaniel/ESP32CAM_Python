@@ -4,9 +4,18 @@ Hand gesture detection from ESP32-CAM stream for LED strip control.
 Uses MediaPipe Hands for landmark detection and classifies gestures
 based on finger extension states. LED strip actions (when --led-url set):
   OPEN_HAND     → ON           OK            → OFF
-  HANG_LOOSE    → rainbow (thumb+pinky = groovy/chill mode)
-  THUMB_UP/DOWN → BRIGHT+/-    POINTER       → fun (1 or 2 islands)   PINCH → explosion
+  HANG_LOOSE    → rainbow     PEACE         → ripple (position-driven 1D water ripples)
+  ROCK          → strobe      THREE         → breathe (pulse)
+  THUMB_UP/DOWN → BRIGHT+/-   POINTER       → fun   PINCH → explosion
   One hand: whole strip follows that gesture. Two hands (mode gestures): left half = hand0, right half = hand1.
+
+Gesture definitions (tuned for comfort):
+  Thumb up/down: Thumb is "extended" when its TIP is not past the index-root line (wrist to INDEX_MCP).
+                 Only the thumb tip is used (not the IP joint) so the pose is easier to hold.
+  PEACE: index + middle extended, ring and pinky folded, thumb folded (not thumb).
+  THREE: index + middle + thumb extended, ring and pinky folded.
+  ROCK: index + pinky extended, middle and ring folded (thumb optional).
+  POINTER: index only (other fingers folded). L: thumb + index. HANG_LOOSE: thumb + pinky.
 
 Controls: q = quit, m = toggle mirror.
 Source: --url for ESP32-CAM stream (default) or --webcam for local webcam.
@@ -66,6 +75,9 @@ GESTURE_ACTIONS = {
     "OPEN_HAND": "ON",
     "OK": "OFF",
     "HANG_LOOSE": "RAINBOW",   # thumb + pinky = groovy/chill = rainbow mode
+    "PEACE": "RIPPLE",         # index + middle = one-shot wave along strip
+    "ROCK": "STROBE",          # index + pinky = strobe/party mode
+    "THREE": "BREATHE",        # index + middle + ring = breathe/pulse mode
     "THUMB_UP": "BRIGHT+",
     "THUMB_DOWN": "BRIGHT-",
     "POINTER": "SELECT",
@@ -83,6 +95,8 @@ LED_DEBOUNCE_FRAMES = 5  # require this many same gesture before changing strip 
 FUN_THROTTLE_SEC = 1.0 / 15.0  # max 15 Hz for /fun position updates
 BRIGHTNESS_THROTTLE_SEC = 0.25  # min interval between brightness up/down steps
 EXPLOSION_THROTTLE_SEC = 0.5   # min interval between pinch-triggered explosions
+RIPPLE_THROTTLE_SEC = 1.0 / 15.0  # ~15 Hz for PEACE ripple position updates (like fun)
+RIPPLE_MIN_VELOCITY = 3  # minimum movement to create a ripple; holding still sends nothing (existing ripples fade)
 
 # Hand landmarker model (downloaded on first run)
 HAND_LANDMARKER_MODEL_URL = (
@@ -148,6 +162,21 @@ def _dist(a, b):
     return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
 
 
+def _side_of_line(ax, ay, bx, by, px, py):
+    """Signed side of point (px,py) relative to line A->B. Positive = one side, negative = other."""
+    return (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+
+
+def _past_index_root_line(lm, px, py):
+    """True if (px, py) is on the palm side of the line from wrist to index root (INDEX_MCP).
+    Palm side = same side as MIDDLE_MCP. More sensitive than middle-root line (thumb down earlier)."""
+    ax, ay = lm[WRIST].x, lm[WRIST].y
+    bx, by = lm[INDEX_MCP].x, lm[INDEX_MCP].y
+    ref = _side_of_line(ax, ay, bx, by, lm[MIDDLE_MCP].x, lm[MIDDLE_MCP].y)  # palm side sign
+    pt = _side_of_line(ax, ay, bx, by, px, py)
+    return (ref >= 0 and pt >= 0) or (ref <= 0 and pt <= 0)
+
+
 def _landmarks_wrapper(landmarks_list):
     """Wrap list of 21 landmarks so they have .landmark for legacy-style access."""
     class Wrapper:
@@ -157,15 +186,15 @@ def _landmarks_wrapper(landmarks_list):
 
 def get_finger_states(hand_landmarks, handedness_label):
     """Return [thumb, index, middle, ring, pinky] booleans (True = extended).
-    Uses both axis checks and distance-from-wrist so gestures work at different angles.
+    Thumb: extended when thumb TIP is not past the index-root line (wrist->INDEX_MCP); only tip is used.
+    Other fingers: extended if tip above PIP or tip farther from wrist than PIP (works at different angles).
     """
     lm = hand_landmarks.landmark if hasattr(hand_landmarks, "landmark") else hand_landmarks
     wrist = lm[WRIST]
 
-    # Thumb: x-direction (left/right) plus distance so it works when palm faces camera
-    thumb_along_x = lm[THUMB_TIP].x < lm[THUMB_IP].x if handedness_label == "Right" else lm[THUMB_TIP].x > lm[THUMB_IP].x
-    thumb_dist = _dist(wrist, lm[THUMB_TIP]) > _dist(wrist, lm[THUMB_IP]) * 1.08
-    thumb = thumb_along_x or thumb_dist
+    # Thumb: "down" when thumb tip is past the index-root line (wrist->INDEX_MCP); else extended (tip only, for comfort)
+    tip_past_index_line = _past_index_root_line(lm, lm[THUMB_TIP].x, lm[THUMB_TIP].y)
+    thumb = not tip_past_index_line
 
     # Index, middle, ring, pinky: extended if tip is above PIP (finger up) OR tip farther from wrist than PIP (works sideways/pointing)
     def finger_extended(tip_idx, pip_idx):
@@ -182,7 +211,9 @@ def get_finger_states(hand_landmarks, handedness_label):
 
 
 def classify_gesture(finger_states, hand_landmarks):
-    """Map finger extension pattern to a named gesture."""
+    """Map finger extension pattern to a named gesture.
+    Order: pinch/OK first, then FIST, OPEN_HAND, thumb-only, POINTER, PEACE, THREE, ROCK, L, HANG_LOOSE.
+    PEACE = index+middle, thumb folded. THREE = index+middle+thumb. ROCK = index+pinky (thumb optional)."""
     thumb, index, middle, ring, pinky = finger_states
     n_up = sum(finger_states)
     lm = hand_landmarks.landmark if hasattr(hand_landmarks, "landmark") else hand_landmarks
@@ -211,12 +242,14 @@ def classify_gesture(finger_states, hand_landmarks):
     # POINTER = index up, other fingers (except thumb) down; thumb can be up (avoids L when pointing)
     if index and not middle and not ring and not pinky:
         return "POINTER"
-    if index and middle and not any([thumb, ring, pinky]):
+    # PEACE = index + middle extended, ring and pinky folded
+    if index and middle and not ring and not pinky and not thumb:
         return "PEACE"
-    if index and middle and ring and not any([thumb, pinky]):
+    # THREE = middle ring and pinky
+    if index and middle and thumb and not pinky and not ring:
         return "THREE"
-    # FOUR folded into OPEN_HAND above (n_up >= 4)
-    if index and pinky and not any([thumb, middle, ring]):
+    # ROCK = index + pinky extended, middle and ring folded 
+    if index and pinky and not middle and not ring:
         return "ROCK"
     if thumb and index and not any([middle, ring, pinky]):
         return "L"
@@ -227,11 +260,16 @@ def classify_gesture(finger_states, hand_landmarks):
 
 
 def _draw_hud(frame, gesture, action, fingers, hand_label, confidence, y_offset=0):
-    """Draw gesture info overlay with drop shadow for readability."""
+    """Draw gesture info overlay with drop shadow for readability.
+    Uses ASCII for finger state so it renders on all systems (Unicode arrows often show as '-' in OpenCV)."""
     finger_labels = ["T", "I", "M", "R", "P"]
-    finger_str = " ".join(
-        f"{n}{'↑' if up else '↓'}" for n, up in zip(finger_labels, fingers)
-    )
+    # Ensure fingers is a list of 5 bools; use ASCII ^/v so OpenCV putText displays correctly
+    if not isinstance(fingers, (list, tuple)) or len(fingers) != 5:
+        finger_str = "?"
+    else:
+        finger_str = " ".join(
+            f"{n}{'^' if up else 'v'}" for n, up in zip(finger_labels, fingers)
+        )
 
     lines = [
         (f"{hand_label} hand ({confidence:.0%})", COLOR_WHITE),
@@ -294,19 +332,23 @@ def _send_led_command(base_url, on: bool, timeout=2.0):
 
 
 def _gesture_to_mode(gesture):
-    """Map gesture to strip mode string for /mode and /split: 'on', 'off', or 'rainbow'."""
+    """Map gesture to strip mode string for /mode and /split: 'on', 'off', 'rainbow', 'strobe', 'breathe'."""
     if gesture == "OPEN_HAND":
         return "on"
     if gesture == "OK":
         return "off"
     if gesture == "HANG_LOOSE":
         return "rainbow"
+    if gesture == "ROCK":
+        return "strobe"
+    if gesture == "THREE":
+        return "breathe"
     return None
 
 
 def _send_led_mode(base_url, mode: str, timeout=2.0):
-    """Send GET /mode?m=on|off|rainbow to set whole strip mode. Returns True if request succeeded."""
-    if not base_url or not requests or mode not in ("on", "off", "rainbow"):
+    """Send GET /mode?m=on|off|rainbow|strobe|breathe to set whole strip mode. Returns True if request succeeded."""
+    if not base_url or not requests or mode not in ("on", "off", "rainbow", "strobe", "breathe"):
         return False
     base_url = base_url.strip().rstrip("/")
     if not base_url:
@@ -329,7 +371,7 @@ def _send_led_split(base_url, left_mode: str, right_mode: str, timeout=2.0):
     if not base_url:
         return False
     for m in (left_mode, right_mode):
-        if m not in ("on", "off", "rainbow"):
+        if m not in ("on", "off", "rainbow", "strobe", "breathe"):
             return False
     try:
         r = requests.get(f"{base_url}/split?left={left_mode}&right={right_mode}", timeout=timeout)
@@ -355,6 +397,31 @@ def _send_led_rainbow(base_url, timeout=2.0):
         return True
     except requests.RequestException as e:
         print(f"[led] rainbow {base_url}: {e}", flush=True)
+        return False
+
+
+def _send_led_ripple(base_url, hue: int = 0, position_pct: int = None, direction: int = 0, velocity: int = 0, timeout=1.0):
+    """Send GET /ripple?h=&p=&dir=&v= to add a position-driven ripple (PEACE gesture).
+    position_pct 0-100 = hand x; direction 1=right -1=left; velocity 0-50 = movement speed (larger reach)."""
+    if not base_url or not requests:
+        return False
+    base_url = base_url.strip().rstrip("/")
+    if not base_url:
+        return False
+    hue = max(0, min(360, hue))
+    if position_pct is not None:
+        p = max(0, min(100, position_pct))
+        dir_val = 1 if direction > 0 else (-1 if direction < 0 else 1)
+        v = max(0, min(50, velocity))
+        url = f"{base_url}/ripple?p={p}&h={hue}&dir={dir_val}&v={v}"
+    else:
+        url = f"{base_url}/ripple?h={hue}"
+    try:
+        r = requests.get(url, timeout=timeout)
+        r.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"[led] ripple {base_url}: {e}", flush=True)
         return False
 
 
@@ -501,6 +568,9 @@ def _worker(args, frame_queue, stop_event, mirror_ref=None):
     last_fun_sent = 0.0
     last_brightness_sent = 0.0
     last_explosion_sent = 0.0
+    last_ripple_sent = 0.0
+    ripple_hue = 0
+    last_peace_x = {}  # hand index -> last x (0-100) for ripple direction/velocity
 
     try:
         for frame in _get_frame_source(args):
@@ -569,7 +639,7 @@ def _worker(args, frame_queue, stop_event, mirror_ref=None):
                     if len(led_gesture_hist.get(1, [])) == LED_DEBOUNCE_FRAMES and len(set(led_gesture_hist[1])) == 1:
                         g1_stable = led_gesture_hist[1][0]
 
-                    # Mode gestures: OPEN_HAND=on, OK=off, HANG_LOOSE=rainbow. One hand = whole strip; two hands = split left/right.
+                    # Mode gestures: OPEN_HAND, OK, HANG_LOOSE, ROCK, THREE → on/off/rainbow/strobe/breathe. One hand = whole strip; two hands = split.
                     m0 = _gesture_to_mode(g0_stable) if g0_stable else None
                     m1 = _gesture_to_mode(g1_stable) if g1_stable else None
                     if g0_stable and g1_stable and m0 is not None and m1 is not None:
@@ -640,8 +710,35 @@ def _worker(args, frame_queue, stop_event, mirror_ref=None):
                                 if _send_led_fun(args.led_url, position_pct, hue):
                                     last_fun_sent = now
                                     last_led_state = last_whole_mode = last_split = None
+                        # PEACE: send ripple only when hand is moving; still hand = no new ripples (they fade out)
+                        if g0_stable == "PEACE" and first_hand_landmarks and len(first_hand_landmarks) > INDEX_TIP and now - last_ripple_sent >= RIPPLE_THROTTLE_SEC:
+                            lm = first_hand_landmarks[INDEX_TIP]
+                            pos_pct = max(0, min(100, int(lm.x * 100)))
+                            prev_x = last_peace_x.get(0)
+                            dx = (pos_pct - prev_x) if prev_x is not None else 0
+                            last_peace_x[0] = pos_pct
+                            velocity = min(50, int(abs(dx) * 3))  # faster movement = larger ripple reach
+                            if velocity >= RIPPLE_MIN_VELOCITY:
+                                dir_val = 1 if dx > 0 else -1
+                                if _send_led_ripple(args.led_url, ripple_hue, position_pct=pos_pct, direction=dir_val, velocity=velocity):
+                                    last_ripple_sent = now
+                                    ripple_hue = (ripple_hue + 25) % 360
+                                    last_led_state = last_whole_mode = last_split = None
+                        if g1_stable == "PEACE" and second_hand_landmarks and len(second_hand_landmarks) > INDEX_TIP and now - last_ripple_sent >= RIPPLE_THROTTLE_SEC:
+                            lm = second_hand_landmarks[INDEX_TIP]
+                            pos_pct = max(0, min(100, int(lm.x * 100)))
+                            prev_x = last_peace_x.get(1)
+                            dx = (pos_pct - prev_x) if prev_x is not None else 0
+                            last_peace_x[1] = pos_pct
+                            velocity = min(50, int(abs(dx) * 3))
+                            if velocity >= RIPPLE_MIN_VELOCITY:
+                                dir_val = 1 if dx > 0 else -1
+                                if _send_led_ripple(args.led_url, (ripple_hue + 180) % 360, position_pct=pos_pct, direction=dir_val, velocity=velocity):
+                                    last_ripple_sent = now
+                                    last_led_state = last_whole_mode = last_split = None
             else:
                 led_gesture_hist = {}
+                last_peace_x = {}
 
             n_hands = len(hand_data)
             for k in list(debounce_hist):
@@ -704,7 +801,7 @@ def main():
         print(f"Using webcam (device index {args.camera_index})")
     else:
         print(f"Connecting to {args.url}")
-    print("Gestures: OPEN_HAND=ON  OK=OFF  HANG_LOOSE=rainbow  THUMB_UP/DOWN=BRIGHT  POINTER=fun  PINCH=explosion")
+    print("Gestures: OPEN_HAND=ON  OK=OFF  HANG_LOOSE=rainbow  PEACE=ripple  ROCK=strobe  THREE=breathe  POINTER=fun  PINCH=explosion")
     if args.led_url:
         print(f"LED strip: {args.led_url}  One hand = whole strip; two hands = left/right half (split)")
         if not requests:
@@ -724,6 +821,9 @@ def main():
         last_whole_mode = None
         last_split = None
         last_fun_sent = 0.0
+        last_ripple_sent = 0.0
+        ripple_hue = 0
+        last_peace_x = {}
         last_brightness_sent = 0.0
         last_explosion_sent = 0.0
         try:
@@ -775,6 +875,18 @@ def main():
                                     last_split = last_led_state = None
                         else:
                             now = time.time()
+                            if g0_stable == "PEACE" and lm0 and len(lm0) > INDEX_TIP and now - last_ripple_sent >= RIPPLE_THROTTLE_SEC:
+                                pos_pct = max(0, min(100, int(lm0[INDEX_TIP].x * 100)))
+                                prev_x = last_peace_x.get(0)
+                                dx = (pos_pct - prev_x) if prev_x is not None else 0
+                                last_peace_x[0] = pos_pct
+                                velocity = min(50, int(abs(dx) * 3))
+                                if velocity >= RIPPLE_MIN_VELOCITY:
+                                    dir_val = 1 if dx > 0 else -1
+                                    if _send_led_ripple(args.led_url, ripple_hue, position_pct=pos_pct, direction=dir_val, velocity=velocity):
+                                        last_ripple_sent = now
+                                        ripple_hue = (ripple_hue + 25) % 360
+                                        last_whole_mode = last_split = last_led_state = None
                             if g0_stable == "THUMB_UP" and now - last_brightness_sent >= BRIGHTNESS_THROTTLE_SEC:
                                 if _send_led_brightness_up(args.led_url):
                                     last_brightness_sent = now

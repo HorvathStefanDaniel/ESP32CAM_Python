@@ -15,8 +15,9 @@
  *   /fun: p = position 0-100, h = hue 0-360 (cluster); optional p2, h2 for second hand
  *   /explosion: p,h = start; 3 pixels move to each end and stack there (Tetris-style). Ignore repeat pinch until done; 2 hands OK.
  *   /rainbow or /groovy: whole strip rainbow effect (persistent mode like on/off).
- *   /mode?m=on|off|rainbow: set whole strip to one mode.
- *   /split?left=on|off|rainbow&right=on|off|rainbow: left half = left mode, right half = right mode (two-hand control).
+ *   /mode?m=on|off|rainbow|strobe|breathe: set whole strip to one mode.
+ *   /split?left=L&right=R: left/right half modes (L,R = on, off, rainbow, strobe, breathe).
+ *   /ripple?h=H or /ripple?p=P&h=H&dir=D&v=V: position-driven 1D ripples (PEACE). p=0-100, dir=±1, v=0-50 (reach).
  * Serial (115200): send "on", "off", "status"
  */
 
@@ -46,16 +47,42 @@ uint8_t funNumIslands = 0;   // 0 = solid, 1 or 2 = islands
 int funPos[2] = { 0, 0 };   // position 0-100 per island
 uint16_t funHue[2] = { 0, 0 };
 
-// Strip mode: 0=off, 1=on (solid), 2=rainbow. When splitActive, left half = leftMode, right half = rightMode.
+// Strip mode: 0=off, 1=on (solid), 2=rainbow, 3=strobe, 4=breathe. When splitActive, left half = leftMode, right half = rightMode.
 #define MODE_OFF 0
 #define MODE_ON  1
 #define MODE_RAINBOW 2
+#define MODE_STROBE  3
+#define MODE_BREATHE 4
 uint8_t leftMode = MODE_OFF;
 uint8_t rightMode = MODE_OFF;
 bool splitActive = false;
 uint16_t rainbowOffset = 0;  // advances each frame for flowing rainbow
 unsigned long lastRainbowMs = 0;
 #define RAINBOW_MS_PER_TICK 50
+bool strobePhase = false;    // for MODE_STROBE: alternate on/off
+unsigned long lastStrobeMs = 0;
+#define STROBE_MS 80
+uint16_t breathePhase = 0;   // 0..359 for sine; breath brightness
+unsigned long lastBreatheMs = 0;
+#define BREATHE_MS_PER_TICK 25
+// Ripple: 1D water-style ripples from hand position (PEACE gesture). Strip is solid; ripples move and dissipate.
+#define RIPPLE_MAX 12
+#define RIPPLE_SPEED 2.0f
+#define RIPPLE_DECAY 0.94f       // amplitude decay per frame
+#define RIPPLE_BASE_REACH 12.0f // minimum half-width in LEDs
+#define RIPPLE_VELOCITY_REACH 1.2f  // extra reach per velocity unit from Python (v 0-50)
+#define RIPPLE_MS_PER_FRAME 25
+struct Ripple {
+  float pos;
+  int dir;
+  uint16_t hue;
+  float amplitude;
+  float reach;
+  bool active;
+};
+Ripple rippleList[RIPPLE_MAX];
+int rippleCount = 0;
+unsigned long lastRippleMs = 0;
 
 // Explosion: 3 pixels move to each end and stack there (Tetris-style). One pinch per hand until done.
 bool explosionActive[2] = { false, false };
@@ -74,20 +101,29 @@ unsigned long lastDrawMs = 0;
 WebServer server(80);
 bool lightsOn = false;
 
+#if USE_WS2812
+// Clear ripples, explosions, stacked pixels, fun islands - same as "off". Call when turning off.
+static void clearAllEffects() {
+  leftMode = MODE_OFF;
+  rightMode = MODE_OFF;
+  splitActive = false;
+  funNumIslands = 0;
+  rippleCount = 0;
+  for (int i = 0; i < RIPPLE_MAX; i++) rippleList[i].active = false;
+  explosionActive[0] = explosionActive[1] = false;
+  explosionLeftActive[0] = explosionLeftActive[1] = false;
+  explosionRightActive[0] = explosionRightActive[1] = false;
+  leftStackCount = 0;
+  rightStackCount = 0;
+  memset(stackedColor, 0, sizeof(stackedColor));
+}
+#endif
+
 static void setLights(bool on) {
   lightsOn = on;
 #if USE_WS2812
   if (!on) {
-    leftMode = MODE_OFF;
-    rightMode = MODE_OFF;
-    splitActive = false;
-    funNumIslands = 0;
-    explosionActive[0] = explosionActive[1] = false;
-    explosionLeftActive[0] = explosionLeftActive[1] = false;
-    explosionRightActive[0] = explosionRightActive[1] = false;
-    leftStackCount = 0;
-    rightStackCount = 0;
-    memset(stackedColor, 0, sizeof(stackedColor));
+    clearAllEffects();
   } else {
     leftMode = MODE_ON;
     rightMode = MODE_ON;
@@ -125,11 +161,31 @@ void handleOff() {
 }
 
 #if USE_WS2812
-// Draw rainbow in range [start, start+count), hue offset by rainbowOffset (0..3600 = 10 full cycles per strip)
+// Draw rainbow in range [start, start+count), hue offset by rainbowOffset
 static void drawRainbowRange(int start, int count) {
   for (int i = 0; i < count && (start + i) < NUM_LEDS; i++) {
     uint16_t hue = ((unsigned long)(start + i) * 360UL / (NUM_LEDS > 0 ? NUM_LEDS : 1) + rainbowOffset) % 360;
     strip.setPixelColor(start + i, hueToColor(hue));
+  }
+}
+
+// Strobe: fill range with color or off depending on phase (fast blink)
+static void drawStrobeRange(int start, int count, bool phaseOn) {
+  uint32_t c = phaseOn ? hueToColor(rainbowOffset % 360) : 0;
+  for (int i = 0; i < count && (start + i) < NUM_LEDS; i++) {
+    strip.setPixelColor(start + i, c);
+  }
+}
+
+// Breathe: fill range with white at pulsed brightness (sine wave 0.25..1.0)
+static void drawBreatheRange(int start, int count) {
+  // breathePhase 0..359 -> factor ~0.25 to 1.0
+  float rad = (float)breathePhase * 2.0f * 3.14159265f / 360.0f;
+  float factor = 0.25f + 0.75f * (sin(rad) + 1.0f) * 0.5f;
+  uint8_t b = (uint8_t)((float)currentBrightness * factor);
+  uint32_t c = strip.Color(b, b, b);
+  for (int i = 0; i < count && (start + i) < NUM_LEDS; i++) {
+    strip.setPixelColor(start + i, c);
   }
 }
 
@@ -139,6 +195,8 @@ static void parseModeArg(const String& arg, uint8_t* out) {
   a.toLowerCase();
   if (a == "off") *out = MODE_OFF;
   else if (a == "rainbow" || a == "groovy") *out = MODE_RAINBOW;
+  else if (a == "strobe" || a == "party") *out = MODE_STROBE;
+  else if (a == "breathe") *out = MODE_BREATHE;
   else *out = MODE_ON;  // "on" or anything else
 }
 
@@ -159,6 +217,9 @@ void handleMode() {
   splitActive = false;
   funNumIslands = 0;
   lightsOn = (leftMode != MODE_OFF);
+#if USE_WS2812
+  if (leftMode == MODE_OFF) clearAllEffects();  // same as /off: clear ripples, explosions, etc.
+#endif
   drawAll();
   server.send(200, "text/plain", "OK mode");
 }
@@ -173,6 +234,68 @@ void handleSplit() {
   lightsOn = (leftMode != MODE_OFF || rightMode != MODE_OFF);
   drawAll();
   server.send(200, "text/plain", "OK split");
+}
+
+static int addRipple(int positionPct, uint16_t hue, int direction, int velocity) {
+  if (rippleCount >= RIPPLE_MAX) {
+    // Remove oldest inactive or first slot
+    for (int i = 0; i < RIPPLE_MAX; i++) {
+      if (!rippleList[i].active) {
+        rippleCount--;
+        for (int j = i; j < RIPPLE_MAX - 1; j++) rippleList[j] = rippleList[j + 1];
+        rippleList[RIPPLE_MAX - 1].active = false;
+        break;
+      }
+    }
+    if (rippleCount >= RIPPLE_MAX) {
+      rippleList[0].active = false;
+      for (int i = 0; i < RIPPLE_MAX - 1; i++) rippleList[i] = rippleList[i + 1];
+      rippleCount = RIPPLE_MAX - 1;
+    }
+  }
+  float pos = (positionPct / 100.0f) * (float)(NUM_LEDS - 1);
+  float reach = RIPPLE_BASE_REACH + (float)(velocity > 50 ? 50 : velocity) * RIPPLE_VELOCITY_REACH;
+  if (reach > 60.0f) reach = 60.0f;
+  int idx = rippleCount;
+  rippleList[idx].pos = pos;
+  rippleList[idx].dir = (direction >= 0) ? 1 : -1;
+  rippleList[idx].hue = hue;
+  rippleList[idx].amplitude = 1.0f;
+  rippleList[idx].reach = reach;
+  rippleList[idx].active = true;
+  rippleCount++;
+  return idx;
+}
+
+void handleRipple() {
+  int h = server.arg("h").toInt();
+  h = (h < 0) ? 0 : (h > 360) ? 360 : h;
+  uint16_t hue = (uint16_t)h;
+  String pArg = server.arg("p");
+  if (pArg.length() > 0) {
+    int p = pArg.toInt();
+    p = (p < 0) ? 0 : (p > 100) ? 100 : p;
+    int dir = server.arg("dir").toInt();
+    if (dir >= 0) dir = 1; else dir = -1;
+    int v = server.arg("v").toInt();
+    if (v < 0) v = 0; else if (v > 50) v = 50;
+    lightsOn = true;
+    leftMode = MODE_OFF;
+    rightMode = MODE_OFF;
+    splitActive = false;
+    funNumIslands = 0;
+    addRipple(p, hue, dir, v);
+  } else {
+    // Backwards compat: add one ripple at center
+    lightsOn = true;
+    leftMode = MODE_OFF;
+    rightMode = MODE_OFF;
+    splitActive = false;
+    funNumIslands = 0;
+    addRipple(50, hue, 1, 10);
+  }
+  drawAll();
+  server.send(200, "text/plain", "OK ripple");
 }
 #endif
 
@@ -196,6 +319,16 @@ static uint32_t hueToColor(uint16_t hue) {
   return strip.Color(g, r, b);  // NEO_GRB
 }
 
+// Blend two NeoPixel colors (NEO_GRB); w = 0..255 = weight of second color
+static uint32_t blendColor(uint32_t c1, uint32_t c2, uint8_t w) {
+  uint8_t g1 = (c1 >> 16) & 0xFF, r1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+  uint8_t g2 = (c2 >> 16) & 0xFF, r2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
+  uint8_t g = (uint16_t)g1 * (255 - w) / 255 + (uint16_t)g2 * w / 255;
+  uint8_t r = (uint16_t)r1 * (255 - w) / 255 + (uint16_t)r2 * w / 255;
+  uint8_t b = (uint16_t)b1 * (255 - w) / 255 + (uint16_t)b2 * w / 255;
+  return strip.Color(g, r, b);
+}
+
 static void drawCluster(int center, uint32_t color) {
   int half = CLUSTER_SIZE / 2;
   int startIdx = center - half;
@@ -209,17 +342,26 @@ static void drawCluster(int center, uint32_t color) {
 
 static void drawAll() {
   strip.fill(0);
-  if (lightsOn) {
+  // When ripples are active, skip base drawing so only the ripple effect is visible on a dark strip
+  if (lightsOn && rippleCount == 0) {
     int mid = NUM_LEDS / 2;
     uint32_t white = strip.Color(currentBrightness, currentBrightness, currentBrightness);
     if (splitActive) {
       if (leftMode == MODE_RAINBOW) drawRainbowRange(0, mid);
       else if (leftMode == MODE_ON) for (int i = 0; i < mid; i++) strip.setPixelColor(i, white);
+      else if (leftMode == MODE_STROBE) drawStrobeRange(0, mid, strobePhase);
+      else if (leftMode == MODE_BREATHE) drawBreatheRange(0, mid);
       if (rightMode == MODE_RAINBOW) drawRainbowRange(mid, NUM_LEDS - mid);
       else if (rightMode == MODE_ON) for (int i = mid; i < NUM_LEDS; i++) strip.setPixelColor(i, white);
+      else if (rightMode == MODE_STROBE) drawStrobeRange(mid, NUM_LEDS - mid, strobePhase);
+      else if (rightMode == MODE_BREATHE) drawBreatheRange(mid, NUM_LEDS - mid);
     } else {
       if (leftMode == MODE_RAINBOW) {
         drawRainbowRange(0, NUM_LEDS);
+      } else if (leftMode == MODE_STROBE) {
+        drawStrobeRange(0, NUM_LEDS, strobePhase);
+      } else if (leftMode == MODE_BREATHE) {
+        drawBreatheRange(0, NUM_LEDS);
       } else if (leftMode == MODE_ON) {
         if (funNumIslands > 0) {
           for (uint8_t i = 0; i < funNumIslands; i++) {
@@ -230,6 +372,25 @@ static void drawAll() {
           strip.fill(white);
         }
       }
+    }
+  }
+  // Ripple overlay: 1D water ripples on dark strip (only ripples visible when rippleCount > 0)
+  for (int i = 0; i < rippleCount; i++) {
+    if (!rippleList[i].active) continue;
+    Ripple* r = &rippleList[i];
+    uint32_t rippleColor = hueToColor(r->hue);
+    int startLed = (int)(r->pos - r->reach);
+    int endLed = (int)(r->pos + r->reach + 1.0f);
+    if (startLed < 0) startLed = 0;
+    if (endLed > NUM_LEDS) endLed = NUM_LEDS;
+    for (int idx = startLed; idx < endLed; idx++) {
+      float dist = fabsf((float)idx - r->pos);
+      if (dist >= r->reach) continue;
+      float t = 1.0f - dist / r->reach;
+      uint8_t blendW = (uint8_t)((float)255 * t * r->amplitude * 0.85f);
+      if (blendW < 2) continue;
+      uint32_t cur = strip.getPixelColor(idx);
+      strip.setPixelColor(idx, blendColor(cur, rippleColor, blendW));
     }
   }
   // Stacked pixels at ends (Tetris-style: left stack then right stack)
@@ -456,6 +617,7 @@ void setup() {
   server.on("/groovy", HTTP_GET, handleRainbow);
   server.on("/mode", HTTP_GET, handleMode);
   server.on("/split", HTTP_GET, handleSplit);
+  server.on("/ripple", HTTP_GET, handleRipple);
   server.on("/fun", HTTP_GET, handleFun);
   server.on("/explosion", HTTP_GET, handleExplosion);
   server.on("/brightness/up", HTTP_GET, handleBrightnessUp);
@@ -481,10 +643,48 @@ void loop() {
   // Advance rainbow animation when any half is in rainbow mode
   if (leftMode == MODE_RAINBOW || rightMode == MODE_RAINBOW) {
     if (now - lastRainbowMs >= RAINBOW_MS_PER_TICK) {
-      rainbowOffset = (rainbowOffset + 2) % 360;  // slow drift
+      rainbowOffset = (rainbowOffset + 2) % 360;
       lastRainbowMs = now;
       needRedraw = true;
     }
+  }
+  // Strobe: toggle phase
+  if (leftMode == MODE_STROBE || rightMode == MODE_STROBE) {
+    if (now - lastStrobeMs >= STROBE_MS) {
+      strobePhase = !strobePhase;
+      lastStrobeMs = now;
+      needRedraw = true;
+    }
+  }
+  // Breathe: advance phase
+  if (leftMode == MODE_BREATHE || rightMode == MODE_BREATHE) {
+    if (now - lastBreatheMs >= BREATHE_MS_PER_TICK) {
+      breathePhase = (breathePhase + 2) % 360;
+      lastBreatheMs = now;
+      needRedraw = true;
+    }
+  }
+  // Ripple: advance all ripples (move and decay), remove when faded
+  if (rippleCount > 0 && now - lastRippleMs >= RIPPLE_MS_PER_FRAME) {
+    lastRippleMs = now;
+    for (int i = 0; i < rippleCount; i++) {
+      if (!rippleList[i].active) continue;
+      rippleList[i].pos += (float)rippleList[i].dir * RIPPLE_SPEED;
+      rippleList[i].amplitude *= RIPPLE_DECAY;
+      if (rippleList[i].amplitude < 0.01f) {
+        rippleList[i].active = false;
+      }
+    }
+    // Compact: remove inactive from list
+    int w = 0;
+    for (int r = 0; r < rippleCount; r++) {
+      if (rippleList[r].active) {
+        if (w != r) rippleList[w] = rippleList[r];
+        w++;
+      }
+    }
+    rippleCount = w;
+    needRedraw = (rippleCount > 0);
   }
   if (needRedraw) drawAll();
 #endif

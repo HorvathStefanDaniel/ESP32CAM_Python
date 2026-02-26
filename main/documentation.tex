@@ -341,9 +341,9 @@ The goal is to separate foreground objects from the background and then count co
 
 \textbf{Step 1 -- Hand landmarks:} \textbf{MediaPipe Hand Landmarker} (a pre-trained model) takes the frame and outputs, per hand, \textbf{21 3D landmarks} (normalized 0--1): wrist, thumb (4 points), and index, middle, ring, pinky (4 points each). No custom training is done in this project.
 
-\textbf{Step 2 -- Finger states:} For each finger, the code decides ``extended'' or ``folded'' using simple geometry. The \textbf{thumb} uses handedness: e.g.\ tip further along the thumb axis than the joint, or tip farther from the wrist than the joint (so it works when the palm faces the camera). For \textbf{index, middle, ring, pinky}, a finger is ``extended'' if the tip is above the PIP joint in image coordinates \textbf{or} the tip is farther from the wrist than the PIP (so pointing sideways still counts as extended).
+\textbf{Step 2 -- Finger states:} For each finger, the code decides ``extended'' or ``folded'' using simple geometry. The \textbf{thumb} is ``down'' (folded) when the \textbf{thumb tip only} is past the line from wrist to index root (INDEX\_MCP); only the tip is used (not the IP joint), for a more comfortable pose. Otherwise the thumb is extended. For \textbf{index, middle, ring, pinky}, a finger is ``extended'' if the tip is above the PIP joint in image coordinates \textbf{or} the tip is farther from the wrist than the PIP (so pointing sideways still counts as extended).
 
-\textbf{Step 3 -- Gesture classification:} The mapping from finger states to gesture names is \textbf{rule-based}, not a neural network. Examples: \textbf{Pinch} = thumb--index tip distance $<$ about 30\% of ``hand size'' (e.g.\ wrist to middle base), other fingers folded. \textbf{OK} = same pinch distance but middle, ring, pinky extended. \textbf{Fist} = no fingers extended. \textbf{Open hand} = four or more extended. \textbf{Thumb up/down} = only thumb extended; tip vs joint in $y$ distinguishes them. \textbf{Pointer} = index extended, others (except maybe thumb) folded. Similar rules define peace, rock, etc.
+\textbf{Step 3 -- Gesture classification:} The mapping from finger states to gesture names is \textbf{rule-based}, not a neural network. Examples: \textbf{Pinch} = thumb--index tip distance $<$ about 30\% of ``hand size'' (e.g.\ wrist to middle base), other fingers folded. \textbf{OK} = same pinch distance but middle, ring, pinky extended. \textbf{Fist} = no fingers extended. \textbf{Open hand} = four or more extended. \textbf{Thumb up/down} = only thumb extended; tip vs joint in $y$ distinguishes them. \textbf{Pointer} = index extended, others folded. \textbf{PEACE} = index + middle extended, ring and pinky folded, thumb folded. \textbf{THREE} = index + middle + thumb extended, ring and pinky folded. \textbf{ROCK} = index + pinky extended, middle and ring folded (thumb optional). These definitions are tuned for comfort.
 
 \textbf{Step 4 -- Stability:} \textbf{Debouncing:} A gesture is sent to the LED strip only after it has been the same for several consecutive frames (e.g.\ 5), to avoid flicker from brief misdetections.
 
@@ -376,8 +376,9 @@ The ESP32 LED strip controller (\texttt{esp32\_led\_strip.ino}) exposes:
 GET \texttt{/on}  & Lights on (solid or last fun state) \\
 GET \texttt{/off} & Lights off \\
 GET \texttt{/rainbow} or \texttt{/groovy} & Whole strip rainbow effect (persistent mode) \\
-GET \texttt{/mode?m=on|off|rainbow} & Set whole strip to one mode \\
-GET \texttt{/split?left=L\&right=R} & Left half mode \texttt{L}, right half mode \texttt{R} (\texttt{L},\texttt{R} = \texttt{on}, \texttt{off}, or \texttt{rainbow}) \\
+GET \texttt{/mode?m=on|off|rainbow|strobe|breathe} & Set whole strip to one mode \\
+GET \texttt{/split?left=L\&right=R} & Left/right half modes (\texttt{L},\texttt{R} = \texttt{on}, \texttt{off}, \texttt{rainbow}, \texttt{strobe}, \texttt{breathe}) \\
+GET \texttt{/ripple?h=H} & One-shot color wave across strip (hue \texttt{H} 0--360) \\
 GET \texttt{/fun?p=P\&h=H} & One moving cluster: position \texttt{P} (0--100), hue \texttt{H} (0--360) \\
 GET \texttt{/fun?p=P\&h=H\&p2=P2\&h2=H2} & Two clusters (e.g.\ two hands) \\
 GET \texttt{/brightness/up}   & Increase brightness \\
@@ -396,17 +397,20 @@ Hand gestures that control the LED strip (only these are sent to the strip):
 \begin{tabular}{@{}ll@{}}
 \toprule
 \textbf{Gesture} & \textbf{Action} \\ \midrule
-OPEN\_HAND   & ON (whole strip or left/right half in split) \\
+OPEN\_HAND   & ON (whole strip or half in split) \\
 OK           & OFF (whole strip or half) \\
-HANG\_LOOSE  & Rainbow mode (thumb + pinky; groovy/chill; whole strip or half) \\
+HANG\_LOOSE  & Rainbow mode (thumb + pinky; whole strip or half) \\
+PEACE        & Ripple effect (index + middle, thumb folded; position-driven, dark strip) \\
+ROCK         & Strobe/party mode (index + pinky; whole strip or half) \\
+THREE        & Breathe/pulse mode (index + middle + thumb; whole strip or half) \\
 THUMB\_UP    & BRIGHT+ \\
 THUMB\_DOWN  & BRIGHT- \\
-POINTER      & Fun mode: 1 or 2 moving clusters by hand count (index position and hue) \\
+POINTER      & Fun mode: 1 or 2 moving clusters (index position and hue) \\
 PINCH        & Explosion from hand position (1 or 2 hands) \\
 \bottomrule
 \end{tabular}
 \end{center}
-\textbf{One hand:} the whole strip follows that gesture (on, off, or rainbow). \textbf{Two hands} (both showing a mode gesture): left half follows hand 0, right half follows hand 1 (e.g.\ left OK + right open palm = left half off, right half on).
+Thumb is ``down'' when only the thumb \emph{tip} is past the wrist--index-root line (comfort tuning). \textbf{One hand:} the whole strip follows that gesture. \textbf{Two hands} (both showing a mode gesture): left half = hand 0, right half = hand 1. Modes: on, off, rainbow, strobe, breathe.
 
 \section{File and Module Overview}
 
