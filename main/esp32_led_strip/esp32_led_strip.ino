@@ -26,7 +26,7 @@
 #include <string.h>
 #include "secrets.h"
 
-#define LED_PIN 4       // IO4 - data pin
+#define LED_PIN 14       // I14 - data pin
 #define USE_WS2812 1    // 1 = WS2812B/NeoPixel, 0 = simple digital on/off
 #define NUM_LEDS 300     // Total LEDs (e.g. 8 sections = 8, or 8×8 = 64 if 8 LEDs per section)
 #define LED_BRIGHTNESS 120   // 0-255. Initial brightness (runtime adjustable via thumbs up/down)
