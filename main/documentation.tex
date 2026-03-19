@@ -46,7 +46,7 @@
 
 \section{Project Description}
 The project combines an \textbf{ESP32-CAM} camera board with Python vision scripts and an \textbf{ESP32 LED strip} controller. The ESP32-CAM serves an MJPEG video stream over WiFi. A PC runs Python scripts that consume this stream for object counting, face detection, or hand gesture recognition. 
-The hand gesture script controls a separate ESP32-driven addressable LED strip over HTTP: open palm turns lights on, OK gesture turns them off, thumbs up/down adjust brightness, and index finger (pointer) drives fun mode (moving cluster position and hue) where pinching triggers a tetris like stacking effect.
+The hand gesture script controls a separate ESP32-driven addressable LED strip over HTTP: OPEN\_HAND turns lights on, OK turns them off, THUMB\_UP/DOWN changes brightness, POINTER controls moving fun clusters, PEACE triggers position-driven ripples, PINCH triggers explosion effects, and HANG\_LOOSE/ROCK/THREE select rainbow, strobe, and breathe modes.
 
 Optional ways to start the different scripts include \texttt{gesture\_launcher.py} (a small UI to paste camera and LED strip IPs and start the hand gesture script), \texttt{run.ps1} (PowerShell launcher that creates a virtual environment, installs dependencies, and runs a chosen script), and \texttt{run.exe} (a double-clickable Windows executable built from \texttt{run\_launcher.py} that offers the same behaviour with an interactive menu for script choice, webcam, URLs, and options).
 
@@ -56,7 +56,7 @@ Optional ways to start the different scripts include \texttt{gesture\_launcher.p
     \item \textbf{Shared stream reader:} \texttt{stream\_reader.py} parses MJPEG or polls snapshot URLs for compatibility with ESP32-CAM
     \item \textbf{Object counting:} Blob counting on contrasting background with optional click-to-set background and tunable parameters
     \item \textbf{Face detection:} OpenCV Haar cascade; optional face recognition via \texttt{face\_recognition} and \texttt{known\_faces/}
-    \item \textbf{Hand gestures:} MediaPipe Hand Landmarker; open palm = on, OK = off, thumbs = brightness, pointer = fun mode
+    \item \textbf{Hand gestures:} MediaPipe Hand Landmarker; OPEN\_HAND/OK (on/off), THUMB\_UP/DOWN (brightness), POINTER (fun), PEACE (ripple), PINCH (explosion), HANG\_LOOSE/ROCK/THREE (modes)
     \item \textbf{LED strip control:} HTTP API (on/off, fun position/hue, brightness); serial commands for the LED board
     \item \textbf{Launcher:} \texttt{run.ps1} for venv and script selection; \texttt{run.exe} (built from \texttt{run\_launcher.py}) for a double-click menu with webcam/URL/recognition prompts; \texttt{gesture\_launcher.py} for camera/LED IPs and Start
 \end{itemize}
@@ -345,7 +345,24 @@ The goal is to separate foreground objects from the background and then count co
 
 \textbf{Step 3 -- Gesture classification:} The mapping from finger states to gesture names is \textbf{rule-based}, not a neural network. Examples: \textbf{Pinch} = thumb--index tip distance $<$ about 30\% of ``hand size'' (e.g.\ wrist to middle base), other fingers folded. \textbf{OK} = same pinch distance but middle, ring, pinky extended. \textbf{Fist} = no fingers extended. \textbf{Open hand} = four or more extended. \textbf{Thumb up/down} = only thumb extended; tip vs joint in $y$ distinguishes them. \textbf{Pointer} = index extended, others folded. \textbf{PEACE} = index + middle extended, ring and pinky folded, thumb folded. \textbf{THREE} = index + middle + thumb extended, ring and pinky folded. \textbf{ROCK} = index + pinky extended, middle and ring folded (thumb optional). These definitions are tuned for comfort.
 
-\textbf{Step 4 -- Stability:} \textbf{Debouncing:} A gesture is sent to the LED strip only after it has been the same for several consecutive frames (e.g.\ 5), to avoid flicker from brief misdetections.
+\textbf{Step 4 -- Stability:} \textbf{Debouncing:} The script uses two debounce windows. A short window (\texttt{DEBOUNCE\_FRAMES = 3}) stabilizes the on-screen gesture label, and a stricter window (\texttt{LED\_DEBOUNCE\_FRAMES = 5}) is required before any LED command is sent. This means the LED strip only changes after the same gesture appears in 5 consecutive frames, which reduces flicker from brief misdetections.
+
+\textbf{Python implementation (LED debounce):}
+\begin{lstlisting}[language=Python]
+LED_DEBOUNCE_FRAMES = 5
+
+# Per-hand rolling history
+hist = led_gesture_hist.get(i, [])
+hist.append(g)
+if len(hist) > LED_DEBOUNCE_FRAMES:
+    hist = hist[-LED_DEBOUNCE_FRAMES:]
+led_gesture_hist[i] = hist
+
+# Stable only if all values in the debounce window match
+g0_stable = None
+if len(led_gesture_hist.get(0, [])) == LED_DEBOUNCE_FRAMES and len(set(led_gesture_hist[0])) == 1:
+    g0_stable = led_gesture_hist[0][0]
+\end{lstlisting}
 
 \textbf{Takeaway:} The ``AI'' is MediaPipe's hand landmark model; the rest is explicit rules on landmarks and finger states, plus debouncing for stable control.
 

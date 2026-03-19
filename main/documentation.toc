@@ -1,32 +1,32 @@
-\contentsline {section}{\numberline {1}Project Description}{2}{section.1}%
-\contentsline {subsection}{\numberline {1.1}Key Features}{2}{subsection.1.1}%
-\contentsline {section}{\numberline {2}Links}{3}{section.2}%
-\contentsline {section}{\numberline {3}Hardware}{3}{section.3}%
-\contentsline {subsection}{\numberline {3.1}Bill of Materials (BOM)}{3}{subsection.3.1}%
-\contentsline {subsection}{\numberline {3.2}ESP32-CAM}{3}{subsection.3.2}%
-\contentsline {subsection}{\numberline {3.3}ESP32 LED Strip}{3}{subsection.3.3}%
-\contentsline {section}{\numberline {4}Software Overview}{4}{section.4}%
-\contentsline {subsection}{\numberline {4.1}Firmware}{4}{subsection.4.1}%
-\contentsline {subsection}{\numberline {4.2}Python Scripts}{4}{subsection.4.2}%
-\contentsline {subsection}{\numberline {4.3}Launcher}{4}{subsection.4.3}%
-\contentsline {subsection}{\numberline {4.4}Creating and using \texttt {run.exe}}{4}{subsection.4.4}%
-\contentsline {subsection}{\numberline {4.5}Portable package (no Python on target PC)}{5}{subsection.4.5}%
-\contentsline {subsection}{\numberline {4.6}Libraries to install}{6}{subsection.4.6}%
-\contentsline {section}{\numberline {5}Environment and Dependencies}{6}{section.5}%
-\contentsline {subsection}{\numberline {5.1}What you need to install (PC / development)}{6}{subsection.5.1}%
-\contentsline {subsection}{\numberline {5.2}Python setup (venv and dependencies)}{7}{subsection.5.2}%
-\contentsline {subsection}{\numberline {5.3}Arduino / ESP32}{7}{subsection.5.3}%
-\contentsline {subsection}{\numberline {5.4}Configuration}{8}{subsection.5.4}%
-\contentsline {section}{\numberline {6}Architecture and Diagrams}{8}{section.6}%
-\contentsline {subsection}{\numberline {6.1}System Architecture}{8}{subsection.6.1}%
-\contentsline {subsection}{\numberline {6.2}Stream to Script Data Flow}{9}{subsection.6.2}%
-\contentsline {subsection}{\numberline {6.3}Hand Gesture Pipeline}{9}{subsection.6.3}%
-\contentsline {subsection}{\numberline {6.4}run.ps1 / run.exe flow}{9}{subsection.6.4}%
-\contentsline {section}{\numberline {7}Algorithms Used in the Project}{9}{section.7}%
-\contentsline {subsection}{\numberline {7.1}Object Counting (Blob Counting)}{10}{subsection.7.1}%
-\contentsline {subsection}{\numberline {7.2}Face Detection and Recognition}{10}{subsection.7.2}%
-\contentsline {subsection}{\numberline {7.3}Hand Gesture Recognition}{11}{subsection.7.3}%
-\contentsline {section}{\numberline {8}Script Usage}{12}{section.8}%
-\contentsline {section}{\numberline {9}LED Strip HTTP API}{12}{section.9}%
-\contentsline {section}{\numberline {10}Gesture Mapping}{13}{section.10}%
-\contentsline {section}{\numberline {11}File and Module Overview}{14}{section.11}%
+\contentsline {section}{\numberline {1}Project Description}{3}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Key Features}{3}{subsection.1.1}%
+\contentsline {section}{\numberline {2}Links}{4}{section.2}%
+\contentsline {section}{\numberline {3}Hardware}{4}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Bill of Materials (BOM)}{4}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}ESP32-CAM}{4}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}ESP32 LED Strip}{4}{subsection.3.3}%
+\contentsline {section}{\numberline {4}Software Overview}{5}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Firmware}{5}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Python Scripts}{5}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Launcher}{5}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Creating and using \texttt {run.exe}}{5}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Portable package (no Python on target PC)}{6}{subsection.4.5}%
+\contentsline {subsection}{\numberline {4.6}Libraries to install}{7}{subsection.4.6}%
+\contentsline {section}{\numberline {5}Environment and Dependencies}{7}{section.5}%
+\contentsline {subsection}{\numberline {5.1}What you need to install (PC / development)}{7}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Python setup (venv and dependencies)}{8}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Arduino / ESP32}{8}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Configuration}{9}{subsection.5.4}%
+\contentsline {section}{\numberline {6}Architecture and Diagrams}{9}{section.6}%
+\contentsline {subsection}{\numberline {6.1}System Architecture}{9}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Stream to Script Data Flow}{10}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Hand Gesture Pipeline}{10}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}run.ps1 / run.exe flow}{10}{subsection.6.4}%
+\contentsline {section}{\numberline {7}Algorithms Used in the Project}{10}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Object Counting (Blob Counting)}{11}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Face Detection and Recognition}{11}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Hand Gesture Recognition}{12}{subsection.7.3}%
+\contentsline {section}{\numberline {8}Script Usage}{13}{section.8}%
+\contentsline {section}{\numberline {9}LED Strip HTTP API}{13}{section.9}%
+\contentsline {section}{\numberline {10}Gesture Mapping}{14}{section.10}%
+\contentsline {section}{\numberline {11}File and Module Overview}{15}{section.11}%
